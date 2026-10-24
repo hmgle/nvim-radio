@@ -153,17 +153,32 @@ end
 ---@return string url, function stop
 function M.start_blackhole()
   local server = assert(vim.uv.new_tcp())
+  local clients = {}
   server:bind("127.0.0.1", 0)
   server:listen(4, function()
     local client = vim.uv.new_tcp()
     server:accept(client)
-    -- Deliberately silent: hold the connection open.
-    client:read_start(function() end)
+    clients[client] = true
+    -- Deliberately silent until the peer exits or the fixture is closed.
+    client:read_start(function(err, chunk)
+      if err or not chunk then
+        clients[client] = nil
+        if not client:is_closing() then
+          client:close()
+        end
+      end
+    end)
   end)
   local port = server:getsockname().port
-  return "http://127.0.0.1:" .. port .. "/slow.mp3", function()
-    server:close()
-  end
+  return "http://127.0.0.1:" .. port .. "/slow.mp3",
+    function()
+      for client in pairs(clients) do
+        if not client:is_closing() then
+          client:close()
+        end
+      end
+      server:close()
+    end
 end
 
 ---Create a short MP3 fixture with FFmpeg.

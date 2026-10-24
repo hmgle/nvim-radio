@@ -74,4 +74,30 @@ return function()
   )
   H.eq(called, false, "cancelled discovery suppresses sync continuation")
   http.get, Player.start = original_get, original_start
+  -- Exercise actual curl cancellation as well as simulated late responses.
+  local slow, stop = H.start_blackhole()
+  local callbacks = 0
+  local request = http.get(slow, { timeout = 5 }, function()
+    callbacks = callbacks + 1
+  end)
+  request:cancel()
+  request:cancel()
+  local killed = request.handle:wait(2000)
+  H.check(killed.code ~= 0 or killed.signal ~= 0, "cancel kills the real curl process")
+  H.eq(callbacks, 0, "cancel suppresses real HTTP completion")
+  stop()
+  local original_system = vim.system
+  vim.system = function()
+    error("missing curl")
+  end
+  local missing
+  local failed = http.get("http://example.test", {}, function(err)
+    missing = err
+  end)
+  vim.system = original_system
+  H.wait_for(1000, function()
+    return missing ~= nil
+  end, "curl spawn failure completes asynchronously")
+  H.check(missing:find("missing curl", 1, true) ~= nil, "curl spawn failure preserves its reason")
+  H.check(pcall(failed.cancel, failed), "completed HTTP task can be cancelled harmlessly")
 end

@@ -93,15 +93,17 @@ end
 function M.request(method, url, opts, cb)
   local outfile = tempname()
   local request = {}
-  request.handle = run_curl(
+  local function finish(err, body, status)
+    request.done = true
+    vim.uv.fs_unlink(outfile, function() end)
+    if not request.cancelled then
+      cb(err, body, status)
+    end
+  end
+  local ok, handle = pcall(
+    run_curl,
     curl_args(method, url, vim.tbl_extend("force", opts or {}, { outfile = outfile })),
     function(code, http_code, curl_err)
-      local function finish(err, body, status)
-        vim.uv.fs_unlink(outfile, function() end)
-        if not request.cancelled then
-          cb(err, body, status)
-        end
-      end
       if code == 63 then
         finish("directory_response_too_large", nil, nil)
         return
@@ -110,24 +112,34 @@ function M.request(method, url, opts, cb)
         finish("directory_request: " .. (curl_err or ("curl exit " .. code)), nil, nil)
         return
       end
-      local status = http_code
-      if status < 200 or status >= 300 then
-        finish("directory_request: HTTP " .. status, nil, status)
+      if http_code < 200 or http_code >= 300 then
+        finish("directory_request: HTTP " .. http_code, nil, http_code)
         return
       end
       local data = read_file(outfile)
       if not data then
-        finish("directory_request: cannot read response", nil, status)
+        finish("directory_request: cannot read response", nil, http_code)
         return
       end
-      finish(nil, data, status)
+      finish(nil, data, http_code)
     end
   )
+  if ok then
+    request.handle = handle
+  else
+    vim.schedule(function()
+      finish("directory_request: " .. tostring(handle))
+    end)
+  end
   function request:cancel()
-    if not self.cancelled then
-      self.cancelled = true
+    if self.done or self.cancelled then
+      return
+    end
+    self.cancelled = true
+    if self.handle then
       pcall(self.handle.kill, self.handle, "sigkill")
     end
+    vim.uv.fs_unlink(outfile, function() end)
   end
   return request
 end

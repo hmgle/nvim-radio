@@ -64,24 +64,29 @@ return function()
     request_timeout_secs = 5,
   })
 
-  -- Discovery against the live all.api mirror is informational only: the
-  -- network is not a test dependency, and a configured api_url bypasses it.
+  -- Test server discovery without depending on public DNS or mirror count.
+  local http = require("radio.http")
+  local original_get = http.get
+  http.get = function(request_url, opts, cb)
+    return original_get(
+      request_url == "https://all.api.radio-browser.info/json/servers" and (url .. "/json/servers")
+        or request_url,
+      opts,
+      cb
+    )
+  end
   local discovery = Directory.new({ connect_timeout_secs = 2, request_timeout_secs = 5 })
-  local discovered, discover_err = nil, nil
+  local discovered, discover_err
   discovery:discover(function(err, servers)
     discovered, discover_err = servers, err
   end)
-  H.wait_for(15000, function()
+  H.wait_for(5000, function()
     return discovered ~= nil or discover_err ~= nil
-  end, "server discovery returns or fails")
-  if discovered then
-    H.check(#discovered > 0, "discovered at least one server")
-    for _, server in ipairs(discovered) do
-      H.check(server:sub(1, 8) == "https://", "discovered server uses https: " .. server)
-    end
-  else
-    io.write("note: live discovery unavailable (" .. tostring(discover_err) .. ")\n")
-  end
+  end, "server discovery completes")
+  http.get = original_get
+  H.eq(discover_err, nil, "fake discovery succeeds")
+  H.eq(#discovered, 1, "discovery rejects the untrusted mirror")
+  H.eq(discovered[1], "https://de1.api.radio-browser.info", "discovery normalizes mirror URLs")
 
   -- Bootstrap seeds the catalog.
   local bootstrapped = nil
