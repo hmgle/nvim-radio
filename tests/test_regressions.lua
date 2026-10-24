@@ -125,26 +125,15 @@ return function()
   local lock_dir = H.tmpdir("regress-lock")
   config.setup({ data_dir = lock_dir, auto_sync_days = 0 })
   vim.fn.mkdir(lock_dir .. "/run", "p")
-  local child = assert(vim.uv.spawn("sleep", { args = { "30" } }, function() end))
-  local function write_pid(pid)
-    local fd = assert(vim.uv.fs_open(lock_dir .. "/run/nvim-radio.pid", "w", 420))
-    vim.uv.fs_write(fd, tostring(pid))
-    vim.uv.fs_close(fd)
-  end
-  write_pid(child:get_pid())
+  local owner = assert(require("radio.lock").acquire(lock_dir .. "/run"))
   local blocked, block_err = Engine.new({ auto_sync = false })
-  H.check(
-    blocked == nil and block_err and block_err:find("media_busy"),
-    "live owner blocks startup"
-  )
+  H.check(blocked == nil and block_err:find("media_busy"), "live owner blocks startup")
   local forced = assert(Engine.new({ auto_sync = false, force = true }))
   forced:shutdown()
-  pcall(vim.uv.process_kill, child, "sigkill")
-  H.wait_for(3000, function()
-    return not vim.uv.kill(child:get_pid(), 0)
-  end, "lock owner exits")
+  H.eq(require("radio.lock").acquire(lock_dir .. "/run"), nil, "bypass does not release owner")
+  owner:release()
   local taken = assert(Engine.new({ auto_sync = false }))
-  H.eq(taken.status.message, "ready", "stale lock taken over")
+  H.eq(taken.status.message, "ready", "released lock taken over")
   taken:shutdown()
 
   -- single_instance = false leaves no lock behind.

@@ -139,7 +139,7 @@ require("radio").setup({
   probe_timeout_secs = 5,
   recording_min_free_mb = 16,
   language = nil,               -- "en" | "zh-CN" (default: environment)
-  single_instance = true,       -- pidfile lock on the data directory
+  single_instance = true,       -- OS file lock, shared with radio-cli
   debug = false,
   data_dir = nil,               -- default $XDG_DATA_HOME/nvim-radio
   keys = {},                    -- opt-in global keymaps
@@ -227,8 +227,9 @@ radio.statusline()
   practice.
 - Artwork rendering, the TUI, shell completions, and the man page are
   radio-cli features with no Neovim equivalent here.
-- Session exclusivity uses a pidfile lock (radio-cli uses `flock`); a stale
-  lock is taken over automatically, and `single_instance = false` disables it.
+- Session exclusivity uses the same `flock` on `<data_dir>/run/media.lock`
+  as radio-cli. Ownership is released by the OS after exit or a crash; the
+  lock file stays in place. `single_instance = false` disables exclusion.
 - The database schema matches radio-cli's, so both tools can share a data
   directory (only one media session at a time).
 

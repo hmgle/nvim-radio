@@ -4,6 +4,7 @@
 local config = require("radio.config")
 local directory = require("radio.directory")
 local log = require("radio.log")
+local Lock = require("radio.lock")
 local model = require("radio.model")
 local player_mod = require("radio.player")
 local recorder_mod = require("radio.recorder")
@@ -40,97 +41,24 @@ local RecordingState = {
 Engine.PlaybackState = PlaybackState
 Engine.RecordingState = RecordingState
 
----@return string|nil pidfile path
-local function pidfile_path()
-  local o = config.options
-  if not o.runtime_dir then
-    return nil
-  end
-  return o.runtime_dir .. "/nvim-radio.pid"
-end
-
----Read a small file through libuv (safe in fast-event contexts).
----@param path string
----@return string
-local function read_file(path)
-  local fd = vim.uv.fs_open(path, "r", 420)
-  if not fd then
-    return ""
-  end
-  local stat = vim.uv.fs_fstat(fd)
-  local data = (stat and stat.size > 0) and vim.uv.fs_read(fd, stat.size, 0) or ""
-  vim.uv.fs_close(fd)
-  return data or ""
-end
-
----@param pid integer
----@return boolean alive and not ourselves
-local function process_alive(pid)
-  if pid <= 0 or pid == vim.uv.os_getpid() then
-    return false
-  end
-  -- uv.kill returns nil plus an error string (it does not raise), so the
-  -- return value — not the pcall — decides whether the process exists.
-  if not vim.uv.kill(pid, 0) then
-    return false
-  end
-  -- A zombie still answers signal 0 until it is reaped; treat it as dead so a
-  -- crashed session does not block the next one.
-  local stat = read_file("/proc/" .. pid .. "/stat")
-  local state = stat:match("%)%s+(%a)")
-  return state ~= "Z"
-end
-
----Take ownership of the data directory, taking over stale locks.
----@return boolean ok, string|nil err, boolean owned
-local function acquire_lock()
-  if not config.options.single_instance then
-    return true, nil, false
-  end
-  local path = pidfile_path()
-  if not path then
-    return true, nil, false
-  end
-  local pid = tonumber(util.trim(read_file(path)))
-  if pid and process_alive(pid) then
-    return false, "media_busy: another session (pid " .. pid .. ") owns this data directory", false
-  end
-  local fd = vim.uv.fs_open(path, "w", 420)
-  if not fd then
-    return false, "cannot write the session lock: " .. path, false
-  end
-  vim.uv.fs_write(fd, tostring(vim.uv.os_getpid()))
-  vim.uv.fs_close(fd)
-  return true, nil, true
-end
-
----Release the lock only while it still names this process.
----@param owned boolean
-local function release_lock(owned)
-  if not owned then
-    return
-  end
-  local path = pidfile_path()
-  if not path then
-    return
-  end
-  local pid = tonumber(util.trim(read_file(path)))
-  if pid == vim.uv.os_getpid() then
-    vim.uv.fs_unlink(path)
-  end
-end
-
 ---@param opts table|nil {force, auto_sync}
 ---@return table|nil engine, string|nil err
 function Engine.new(opts)
   opts = opts or {}
-  local o = config.options
-  local lock_ok, lock_err, lock_owned = acquire_lock()
-  if not lock_ok and not opts.force then
-    return nil, lock_err
+  local o = config.ensure()
+  local session_lock
+  if o.single_instance and not opts.force then
+    local lock_err
+    session_lock, lock_err = Lock.acquire(o.runtime_dir)
+    if not session_lock then
+      return nil, lock_err
+    end
   end
   local store, store_err = store_mod.open(o.db_path)
   if not store then
+    if session_lock then
+      session_lock:release()
+    end
     return nil, store_err
   end
   local resume_source = store:meta("pref_source")
@@ -145,7 +73,7 @@ function Engine.new(opts)
   local self
   self = setmetatable({
     store = store,
-    lock_owned = lock_owned,
+    session_lock = session_lock,
     resume_source = resume_source,
     resume_station = resume_station,
     refresh_count = 0,
@@ -1053,7 +981,10 @@ function Engine:shutdown()
     vim.wait(20)
   end
   self:_stop_timer()
-  release_lock(self.lock_owned)
+  if self.session_lock then
+    self.session_lock:release()
+    self.session_lock = nil
+  end
   if self.store then
     self.store:close()
     self.store = nil

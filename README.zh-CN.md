@@ -133,7 +133,7 @@ require("radio").setup({
   probe_timeout_secs = 5,
   recording_min_free_mb = 16,
   language = nil,               -- "en" | "zh-CN"（默认取环境变量）
-  single_instance = true,       -- 数据目录 pidfile 锁
+  single_instance = true,       -- 数据目录 flock 锁
   debug = false,
   data_dir = nil,               -- 默认 $XDG_DATA_HOME/nvim-radio
   keys = {},                    -- 可选的全局键位
@@ -216,8 +216,8 @@ radio.statusline()
   额外先尝试 DNS SRV 查询。实际服务器集合相同。
 - artwork 终端图形、TUI、shell 补全与 man 页是 radio-cli 特有功能，本插件
   没有对应实现。
-- 会话互斥使用 pidfile 锁（radio-cli 使用 `flock`）；陈旧锁会被自动接管，
-  `single_instance = false` 可关闭。
+- 会话互斥与 radio-cli 共用 `<data_dir>/run/media.lock` 上的 `flock`。
+  退出或崩溃后由操作系统释放所有权，锁文件保留；`single_instance = false` 可关闭互斥。
 - 数据库 schema 与 radio-cli 一致，两个工具可共用数据目录（但同时只能有
   一个媒体会话）。
 
