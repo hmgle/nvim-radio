@@ -17,6 +17,7 @@ local suites = {
   "test_recorder",
   "test_directory",
   "test_async",
+  "test_lifecycle",
   "test_engine",
   "test_ui",
   "test_regressions",

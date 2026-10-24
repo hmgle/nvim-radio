@@ -81,33 +81,52 @@ end
 ---@param cb fun(result: table, timed_out: boolean)
 ---@return table|nil handle killable vim.system handle
 local function run_with_timeout(args, timeout, cb)
-  local done = false
+  local task = {}
   local timer
-  local handle = vim.system(args, {}, function(result)
-    if done then
-      return
-    end
-    done = true
+  local function stop_timer()
     if timer and not timer:is_closing() then
       timer:stop()
       timer:close()
     end
-    cb(result, false)
-  end)
-  timer = vim.uv.new_timer()
-  timer:start(math.max(1, math.floor((timeout or 5) * 1000)), 0, function()
-    timer:stop()
-    timer:close()
-    if done then
+  end
+  function task:cancel()
+    if self.done then
       return
     end
-    done = true
-    pcall(function()
-      handle:kill("sigkill")
+    self.done = true
+    stop_timer()
+    if self.handle then
+      pcall(self.handle.kill, self.handle, "sigkill")
+    end
+  end
+  local ok, handle = pcall(vim.system, args, {}, function(result)
+    if task.done then
+      return
+    end
+    task.done = true
+    stop_timer()
+    cb(result, false)
+  end)
+  if not ok then
+    vim.schedule(function()
+      if not task.done then
+        task.done = true
+        cb({ code = -1, stderr = tostring(handle) }, false)
+      end
     end)
+    return task
+  end
+  task.handle = handle
+  timer = vim.uv.new_timer()
+  timer:start(math.max(1, math.floor((timeout or 5) * 1000)), 0, function()
+    if task.done then
+      stop_timer()
+      return
+    end
+    task:cancel()
     cb({ code = -1, stdout = "", stderr = "timeout" }, true)
   end)
-  return handle
+  return task
 end
 
 ---Run ffprobe against a URL or file.
@@ -115,7 +134,7 @@ end
 ---@param input string
 ---@param timeout number|nil
 ---@param cb fun(err: string|nil, info: table|nil)
----@return table|nil handle vim.system handle (killable)
+---@return table task cancellable probe
 function Recorder.probe(opts, input, timeout, cb)
   local args = {
     opts.ffprobe or "ffprobe",
@@ -391,6 +410,7 @@ function Recorder.start(opts, store, station, url, dir, duration, info, track)
   end)
   vim.uv.fs_close(fd)
   if not handle then
+    stderr_pipe:close()
     vim.uv.fs_unlink(partial)
     return nil,
       "missing_dependency: ffmpeg" .. (spawn_err and (" (" .. tostring(spawn_err) .. ")") or "")
@@ -399,6 +419,7 @@ function Recorder.start(opts, store, station, url, dir, duration, info, track)
   self._stderr_pipe = stderr_pipe
   stderr_pipe:read_start(function(err, chunk)
     if err or not chunk then
+      self:_close_stderr()
       return
     end
     self:_consume_stderr(chunk)
@@ -443,10 +464,37 @@ function Recorder:_handle_stderr_line(line)
   self.errors = append_error_tail(self.errors, line)
 end
 
+function Recorder:_close_stderr()
+  if self._stderr_pipe and not self._stderr_pipe:is_closing() then
+    self._stderr_pipe:read_stop()
+    self._stderr_pipe:close()
+  end
+end
+
+function Recorder:_settle(err)
+  if self._settled then
+    return
+  end
+  self._settled = true
+  self._finish_error = err
+  self:_close_stderr()
+  local callbacks = self._finish_callbacks or {}
+  self._finish_callbacks = {}
+  for _, cb in ipairs(callbacks) do
+    cb(self.record, err)
+  end
+end
+
 function Recorder:_on_exit(code, signal)
   self.ended = true
   self.exit_code = code
   self.exit_signal = signal
+  if self.handle and not self.handle:is_closing() then
+    self.handle:close()
+  end
+  if self._cancelled then
+    self:_settle(self.record.error)
+  end
 end
 
 ---@return boolean ended
@@ -468,8 +516,13 @@ end
 ---@param reason string|nil
 ---@param cb fun(record: table, err: string|nil)
 function Recorder:finish(reason, cb)
+  if self._settled then
+    cb(self.record, self._finish_error)
+    return
+  end
+  self._finish_callbacks = self._finish_callbacks or {}
+  self._finish_callbacks[#self._finish_callbacks + 1] = cb
   if self.finished then
-    cb(self.record, nil)
     return
   end
   self.finished = true
@@ -478,17 +531,21 @@ function Recorder:finish(reason, cb)
       self.stop_requested = true
       pcall(vim.uv.process_kill, self.handle, "sigint")
     end
+    local deadline = vim.uv.now() + 3000
     local timer = vim.uv.new_timer()
-    local waited = 0
-    timer:start(50, 100, function()
-      waited = waited + 50
-      if self.ended or waited >= 3000 then
+    self._stop_timer = timer
+    timer:start(0, 25, function()
+      if self.ended then
         timer:stop()
         timer:close()
-        if not self.ended and self.handle and not self.handle:is_closing() then
+        self._stop_timer = nil
+        done()
+      elseif vim.uv.now() >= deadline then
+        -- Wait for the exit callback before inspecting a file still owned by
+        -- ffmpeg. Engine shutdown can cancel this task at its outer deadline.
+        if self.handle and not self.handle:is_closing() then
           pcall(vim.uv.process_kill, self.handle, "sigkill")
         end
-        done()
       end
     end)
   end
@@ -497,17 +554,24 @@ function Recorder:finish(reason, cb)
   -- never blocked by ffprobe.
   local finalize
   local function collect()
+    if self._cancelled then
+      return
+    end
     local stat = vim.uv.fs_stat(self.partial)
     self.record.size_bytes = stat and stat.size or 0
     self.record.stopped_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
     self.record.reconnects = self.reconnects
-    Recorder.probe(self.opts, self.partial, 2, function(_, verification)
+    self._verification = Recorder.probe(self.opts, self.partial, 2, function(_, verification)
+      self._verification = nil
       finalize(verification)
     end)
   end
 
   -- Step 2: decide the outcome from the probe result and publish.
   finalize = function(verification)
+    if self._cancelled then
+      return
+    end
     if verification then
       local duration_text = verification.format and verification.format.duration
       local seconds = tonumber(duration_text)
@@ -563,7 +627,7 @@ function Recorder:finish(reason, cb)
           .. tostring(publish_err)
         self.store:save_recording(self.record)
         write_sidecar(self.record)
-        cb(self.record, tostring(publish_err))
+        self:_settle(tostring(publish_err))
         return
       end
       local final_stat = vim.uv.fs_stat(self.final_path)
@@ -574,7 +638,7 @@ function Recorder:finish(reason, cb)
         self.record.recovery_pending = true
         self.store:save_recording(self.record)
         write_sidecar(self.record)
-        cb(self.record, "recording_size_mismatch")
+        self:_settle("recording_size_mismatch")
         return
       end
       self.record.path = self.final_path
@@ -584,7 +648,7 @@ function Recorder:finish(reason, cb)
       self.store:save_recording(self.record)
       write_sidecar(self.record)
       vim.uv.fs_unlink(self.partial .. ".json")
-      cb(self.record, nil)
+      self:_settle(nil)
       return
     end
 
@@ -596,7 +660,7 @@ function Recorder:finish(reason, cb)
     end
     self.store:save_recording(self.record)
     write_sidecar(self.record)
-    cb(self.record, nil)
+    self:_settle(nil)
   end
 
   -- Finalization leaves the fast-event context that libuv timers and stream
@@ -617,20 +681,33 @@ end
 ---Abort without publishing; keeps the partial file for recovery.
 ---@param reason string|nil
 function Recorder:cancel(reason)
-  if self.finished then
+  if self._settled or self._cancelled then
     return
   end
+  self._cancelled = true
   self.finished = true
+  if self._stop_timer and not self._stop_timer:is_closing() then
+    self._stop_timer:stop()
+    self._stop_timer:close()
+    self._stop_timer = nil
+  end
+  if self._verification then
+    self._verification:cancel()
+    self._verification = nil
+  end
   self.record.status = "interrupted"
   self.record.error = reason or "cancelled"
+  self.record.recovery_pending = true
   self.record.stopped_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
   local stat = vim.uv.fs_stat(self.partial)
   self.record.size_bytes = stat and stat.size or 0
-  if self.handle and not self.handle:is_closing() then
-    pcall(vim.uv.process_kill, self.handle, "sigkill")
-  end
   self.store:save_recording(self.record)
   write_sidecar(self.record)
+  if not self.ended and self.handle and not self.handle:is_closing() then
+    pcall(vim.uv.process_kill, self.handle, "sigkill")
+  else
+    self:_settle(self.record.error)
+  end
 end
 
 ---Recover interrupted recordings from a previous session.

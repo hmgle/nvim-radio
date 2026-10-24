@@ -77,7 +77,8 @@ function Engine.new(opts)
     resume_source = resume_source,
     resume_station = resume_station,
     refresh_count = 0,
-    finalizing = false,
+    finalizers = {},
+    retiring_players = {},
     directory = directory.new({
       api_url = o.api_url,
       connect_timeout_secs = o.connect_timeout_secs,
@@ -187,7 +188,7 @@ end
 
 ---Ensure the tick timer runs while something is active.
 function Engine:_ensure_timer()
-  if self.timer then
+  if self.stopping or self.timer then
     return
   end
   self.timer = vim.uv.new_timer()
@@ -216,7 +217,7 @@ function Engine:active()
     or self.reconnect_due ~= nil
     or self.recorder ~= nil
     or self.recording_probe ~= nil
-    or self.finalizing
+    or next(self.finalizers) ~= nil
     or self.syncing
 end
 
@@ -268,6 +269,9 @@ end
 
 ---@param target string UUID or http(s) URL
 function Engine:play(target)
+  if self.stopping or not self.store then
+    return
+  end
   self.random_filter = nil
   self.random_tried = {}
   if util.is_uuid(target) then
@@ -297,6 +301,9 @@ end
 
 ---@param station table
 function Engine:play_station(station)
+  if self.stopping or not self.store then
+    return
+  end
   local backups = self.store:backups(station.stationuuid)
   local candidates = model.Station.stream_candidates(station, backups)
   self:_play_source(station, candidates, "catalog")
@@ -304,6 +311,9 @@ end
 
 ---@param id string recording id
 function Engine:play_recording(id)
+  if self.stopping or not self.store then
+    return
+  end
   local record = self.store:recording(id)
   if not record then
     self:_fail_playback("recording_not_found")
@@ -328,9 +338,6 @@ function Engine:play_recording(id)
   self.local_recording_id = id
 end
 
----@param station table
----@param candidates string[]
----@param kind string
 ---@param station table
 ---@param candidates string[]
 ---@param kind string
@@ -377,6 +384,9 @@ function Engine:_start_candidate()
 end
 
 function Engine:_start_url()
+  if self.stopping or not self.store then
+    return
+  end
   local o = config.options
   self:_ensure_timer()
   self.started_at = vim.uv.now()
@@ -389,6 +399,7 @@ function Engine:_start_url()
   -- switching stations must never let a stale player resurrect playback.
   local generation = self.generation
   local starting
+  local completed = false
   starting = player_mod.start({
     mpv = o.mpv,
     volume = self.status.volume,
@@ -403,10 +414,7 @@ function Engine:_start_url()
     end
     self:_on_player_event(event)
   end, function(err, player)
-    self.player_starting = false
-    if self.starting_player == starting then
-      self.starting_player = nil
-    end
+    completed = true
     if generation ~= self.generation then
       -- Superseded while connecting: drop the process immediately.
       if player then
@@ -414,13 +422,17 @@ function Engine:_start_url()
       end
       return
     end
+    self.player_starting = false
+    self.starting_player = nil
     if err then
       self:_player_failed(err)
       return
     end
     self.player = player
   end)
-  self.starting_player = starting
+  if not completed and generation == self.generation then
+    self.starting_player = starting
+  end
 end
 
 ---@param event table
@@ -620,6 +632,9 @@ end
 
 ---@param filter table|nil
 function Engine:random(filter)
+  if self.stopping or not self.store then
+    return
+  end
   self.random_tried = self.status.station and { self.status.station.stationuuid } or {}
   self.random_filter = model.filter(filter)
   self:_pick_random()
@@ -688,19 +703,19 @@ function Engine:stop_playback()
 end
 
 function Engine:_retire_player()
-  local player = self.player
-  local starting = self.starting_player
-  self.player = nil
-  self.starting_player = nil
+  local player, starting = self.player, self.starting_player
+  self.player, self.starting_player = nil, nil
+  self.player_starting = false
   self.confirmed = false
-  -- Retiring a player invalidates every callback it owns, so a late event or
-  -- a late start confirmation cannot resurrect playback.
   self.generation = self.generation + 1
-  if player then
-    player:close()
-  end
-  if starting then
-    starting:close()
+  for _, child in pairs({ player, starting }) do
+    if not self.retiring_players[child] then
+      self.retiring_players[child] = true
+      child:close(function()
+        self.retiring_players[child] = nil
+        self:_complete_shutdown()
+      end)
+    end
   end
 end
 
@@ -727,15 +742,11 @@ end
 ---@param duration integer|nil seconds
 ---@param dir string|nil
 function Engine:record_current(duration, dir)
-  if not self.store then
+  if self.stopping or not self.store then
     return
   end
-  if self.source_kind == "local" then
-    self:_fail_recording("local_recording")
-    return
-  end
-  if self.source_kind == "ephemeral" then
-    self:_fail_recording("ephemeral_recording")
+  if self.source_kind == "local" or self.source_kind == "ephemeral" then
+    self:_fail_recording(self.source_kind == "local" and "local_recording" or "ephemeral_recording")
     return
   end
   if not self:playing() then
@@ -747,73 +758,94 @@ function Engine:record_current(duration, dir)
     self:_fail_recording("not_playing")
     return
   end
-  local o = config.options
-  local url = self.url
-  local track = self.status.title
+  self:_record_source(station, { self.url }, duration, dir)
+end
+
+-- A task owns every probe attempt and its eventual recorder. Cancellation
+-- invalidates the task before killing ffprobe, including between backups.
+function Engine:_record_source(station, candidates, duration, dir)
   if self.recorder or self.recording_probe then
     self:_fail_recording("recording_busy")
     return
   end
-  local probe_state = {
-    station = station,
-    track = track,
-    url = url,
-    dir = dir or o.recording_dir,
-    duration = duration,
-    generation = self.generation,
-  }
-  self.recording_probe = probe_state
+  local o = config.options
+  local task = { station = station, track = self.status.title, generation = self.generation }
+  self.recording_probe = task
+  self.recording_owner = task
   self.status.recording_state = RecordingState.Probing
   self.status.recording_ms = 0
   self.status.recording_path = ""
   self:_say("probing stream for recording")
   self:_ensure_timer()
-  probe_state.handle = recorder_mod.probe(
-    { ffprobe = o.ffprobe, probe_timeout_secs = o.probe_timeout_secs },
-    url,
-    o.probe_timeout_secs,
-    function(err, info)
-      if self.recording_probe ~= probe_state then
-        return
-      end
-      self.recording_probe = nil
-      if probe_state.generation ~= self.generation then
-        self.status.recording_state = RecordingState.Idle
-        self:emit()
-        return
-      end
-      if err then
-        self:_fail_recording("probe failed: " .. err)
-        return
-      end
-      local recorder, start_err = recorder_mod.start({
-        ffmpeg = o.ffmpeg,
-        ffprobe = o.ffprobe,
-        probe_timeout_secs = o.probe_timeout_secs,
-        playback_timeout_secs = o.playback_timeout_secs,
-        recording_min_free_mb = o.recording_min_free_mb,
-      }, self.store, station, url, probe_state.dir, duration, info, track)
-      if not recorder then
-        self:_fail_recording(start_err)
-        return
-      end
-      self.recorder = recorder
-      self.status.recording_state = RecordingState.Recording
-      self.status.recording_path = recorder.record.path
-      self:_say(
-        recorder.space_estimated and "recording" or "recording (space estimate unavailable)"
-      )
-      self:_ensure_timer()
+  local function current()
+    return not self.stopping
+      and self.store ~= nil
+      and self.recording_probe == task
+      and self.generation == task.generation
+  end
+  local function attempt(last_err)
+    if not current() then
+      return
     end
-  )
+    local url = table.remove(candidates, 1)
+    if not url then
+      self.recording_probe = nil
+      self:_fail_recording(last_err or "no_stream")
+      return
+    end
+    local completed = false
+    local handle = recorder_mod.probe(
+      { ffprobe = o.ffprobe },
+      url,
+      o.probe_timeout_secs,
+      function(err, info)
+        completed = true
+        task.handle = nil
+        if not current() then
+          if self.recording_probe == task then
+            self.recording_probe = nil
+            self.status.recording_state = RecordingState.Idle
+            self:emit()
+          end
+          return
+        end
+        if err then
+          attempt("probe failed: " .. err)
+          return
+        end
+        local recorder, start_err = recorder_mod.start({
+          ffmpeg = o.ffmpeg,
+          ffprobe = o.ffprobe,
+          playback_timeout_secs = o.playback_timeout_secs,
+          recording_min_free_mb = o.recording_min_free_mb,
+        }, self.store, station, url, dir or o.recording_dir, duration, info, task.track)
+        if not recorder then
+          attempt(start_err)
+          return
+        end
+        self.recording_probe = nil
+        self.recorder = recorder
+        self.recording_owner = recorder
+        self.status.recording_state = RecordingState.Recording
+        self.status.recording_path = recorder.record.path
+        self:_say(
+          recorder.space_estimated and "recording" or "recording (space estimate unavailable)"
+        )
+        self:_ensure_timer()
+      end
+    )
+    if not completed then
+      task.handle = handle
+    end
+  end
+  attempt()
 end
 
 ---@param uuid string
 ---@param duration integer|nil
 ---@param dir string|nil
 function Engine:standalone_record(uuid, duration, dir)
-  if self.recorder then
-    self:_fail_recording("recording_busy")
+  if self.stopping or not self.store then
     return
   end
   local station = self.store:station(uuid)
@@ -821,59 +853,12 @@ function Engine:standalone_record(uuid, duration, dir)
     self:_fail_recording("station_not_found")
     return
   end
-  local o = config.options
-  local backups = self.store:backups(uuid)
-  local candidates = model.Station.stream_candidates(station, backups)
-  local tried = {}
-  local last_err = nil
-
-  local function attempt_next(refresh)
-    if refresh and not station.custom then
-      self.directory:refresh(uuid, function(refresh_err, updated)
-        if not refresh_err and updated then
-          self.store:upsert(updated)
-          station = updated
-          candidates = model.Station.stream_candidates(station, self.store:backups(uuid))
-        end
-        attempt_next(false)
-      end)
-      return
-    end
-    local url = table.remove(candidates, 1)
-    while url and vim.tbl_contains(tried, url) do
-      url = table.remove(candidates, 1)
-    end
-    if not url then
-      self:_fail_recording("recording_sources_failed: " .. tostring(last_err))
-      return
-    end
-    tried[#tried + 1] = url
-    recorder_mod.probe({ ffprobe = o.ffprobe }, url, o.probe_timeout_secs, function(err, info)
-      if err then
-        last_err = err
-        attempt_next(false)
-        return
-      end
-      local recorder, start_err = recorder_mod.start({
-        ffmpeg = o.ffmpeg,
-        ffprobe = o.ffprobe,
-        playback_timeout_secs = o.playback_timeout_secs,
-        recording_min_free_mb = o.recording_min_free_mb,
-      }, self.store, station, url, dir or o.recording_dir, duration, info, self.status.title)
-      if not recorder then
-        last_err = start_err
-        attempt_next(false)
-        return
-      end
-      self.recorder = recorder
-      self.status.recording_state = RecordingState.Recording
-      self.status.recording_path = recorder.record.path
-      self:_say("recording")
-      self:_ensure_timer()
-    end)
-  end
-
-  attempt_next(false)
+  self:_record_source(
+    station,
+    model.Station.stream_candidates(station, self.store:backups(uuid)),
+    duration,
+    dir
+  )
 end
 
 ---@param reason string|nil
@@ -888,7 +873,7 @@ function Engine:_stop_recording(reason)
   if probe then
     if probe.handle then
       pcall(function()
-        probe.handle:kill("sigterm")
+        probe.handle:cancel()
       end)
     end
     self.status.recording_state = RecordingState.Idle
@@ -901,10 +886,14 @@ function Engine:_stop_recording(reason)
     return
   end
   self.status.recording_state = RecordingState.Finalizing
-  self.finalizing = true
+  self.finalizers[recorder] = true
   self:_say("finalizing recording")
   recorder:finish(reason, function(record, err)
-    self.finalizing = false
+    self.finalizers[recorder] = nil
+    self:_complete_shutdown()
+    if self.stopping or self.recording_owner ~= recorder then
+      return
+    end
     self.status.recording_ms = 0
     self.status.recording_path = record.path
     if err or record.status ~= "complete" then
@@ -978,32 +967,58 @@ function Engine:sync(opts, cb)
   end)
 end
 
----True while a recording still needs the database (probe, publish, save).
-function Engine:_finalizing()
-  return self.finalizing or self.recorder ~= nil or self.recording_probe ~= nil
+-- Closing storage is the last lifecycle action. If a killed child has not
+-- been reaped at the deadline, retain the store and lock until its callback.
+function Engine:_shutdown_pending()
+  return next(self.finalizers) ~= nil or next(self.retiring_players) ~= nil
 end
 
-function Engine:shutdown()
-  self.stopping = true
-  self.directory:close()
-  self.syncing = false
-  self:_stop_recording("shutdown")
-  self:stop_playback()
-  -- Finalization writes to the store asynchronously; give it a bounded window
-  -- before the database and the session lock go away.
-  local deadline = vim.uv.now() + 6000
-  while self:_finalizing() and vim.uv.now() < deadline do
-    vim.wait(20)
+function Engine:_complete_shutdown()
+  if not self.stopping or self._shutdown_waiting or self:_shutdown_pending() then
+    return false
   end
   self:_stop_timer()
-  if self.session_lock then
-    self.session_lock:release()
-    self.session_lock = nil
-  end
   if self.store then
     self.store:close()
     self.store = nil
   end
+  if self.session_lock then
+    self.session_lock:release()
+    self.session_lock = nil
+  end
+  return true
+end
+
+---@param opts table|nil {timeout_ms} total grace and forced-reap budget
+---@return boolean closed false only while killed children are still exiting
+function Engine:shutdown(opts)
+  if not self.store then
+    return true
+  end
+  self._shutdown_waiting = true
+  self.stopping = true
+  self.directory:close()
+  self.syncing = false
+  self:_stop_timer()
+  self:_stop_recording("shutdown")
+  self:stop_playback()
+  local budget = math.max(0, opts and opts.timeout_ms or 6000)
+  local deadline = vim.uv.now() + budget
+  local graceful_deadline = deadline - math.min(500, budget)
+  vim.wait(math.max(0, graceful_deadline - vim.uv.now()), function()
+    return not self:_shutdown_pending()
+  end, 10)
+  if next(self.finalizers) then
+    local pending = vim.tbl_keys(self.finalizers)
+    for _, recorder in ipairs(pending) do
+      recorder:cancel("shutdown timeout")
+    end
+  end
+  vim.wait(math.max(0, deadline - vim.uv.now()), function()
+    return not self:_shutdown_pending()
+  end, 10)
+  self._shutdown_waiting = false
+  return self:_complete_shutdown()
 end
 
 return Engine

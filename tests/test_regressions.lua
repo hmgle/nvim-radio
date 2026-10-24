@@ -155,12 +155,22 @@ return function()
     captured_event = on_event
     vim.schedule(function()
       on_started(nil, {
-        close = function() end,
+        close = function(_, cb)
+          if cb then
+            cb()
+          end
+        end,
         command = function() end,
         toggle_pause = function() end,
       })
     end)
-    return { close = function() end }
+    return {
+      close = function(_, cb)
+        if cb then
+          cb()
+        end
+      end,
+    }
   end
   local engine = assert(Engine.new({ auto_sync = false }))
   local uuid = "16161616-1616-4616-8616-161616161616"

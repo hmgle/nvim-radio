@@ -132,6 +132,48 @@ return function()
   H.eq(stored.status, "complete", "database updated to complete")
   H.eq(#store:unfinished_recordings(), 0, "no unfinished recordings")
 
+  H.eq(recorder.handle:is_closing(), true, "ffmpeg process handle released")
+  H.eq(recorder._stderr_pipe:is_closing(), true, "ffmpeg stderr pipe released")
+
+  -- SIGINT can be ignored. Enforce a real three-second deadline, then reap
+  -- the child before validating or publishing its output.
+  local stubborn = dir .. "/stubborn-ffmpeg"
+  local ready = dir .. "/stubborn-ready"
+  vim.fn.writefile({
+    "#!/bin/sh",
+    "trap '' INT",
+    "cat " .. vim.fn.shellescape(mp3),
+    "touch " .. vim.fn.shellescape(ready),
+    "exec sleep 30",
+  }, stubborn)
+  vim.uv.fs_chmod(stubborn, 448)
+  local hard = assert(
+    Recorder.start(
+      vim.tbl_extend("force", opts, { ffmpeg = stubborn }),
+      store,
+      station,
+      url .. "/fixture.mp3",
+      recordings,
+      nil,
+      { streams = { { codec_name = "mp3" } } }
+    )
+  )
+  H.wait_for(2000, function()
+    return vim.uv.fs_stat(ready) ~= nil
+  end, "stubborn child is ready")
+  local began, done = vim.uv.hrtime(), false
+  hard:finish(nil, function()
+    done = true
+  end)
+  H.wait_for(5000, function()
+    return done
+  end, "stubborn child killed and finalized")
+  local elapsed = (vim.uv.hrtime() - began) / 1e6
+  H.check(elapsed >= 2800 and elapsed < 4500, "SIGKILL deadline is three seconds, not six")
+  H.eq(hard.exit_signal, 9, "stubborn ffmpeg was killed")
+  H.eq(hard.handle:is_closing(), true, "killed ffmpeg process handle released")
+  H.eq(hard._stderr_pipe:is_closing(), true, "killed ffmpeg stderr pipe released")
+
   -- Crash recovery: a stale recording row is finalized as interrupted.
   store:save_recording(model.recording({
     id = "stale-rec",

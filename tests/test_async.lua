@@ -12,7 +12,13 @@ return function()
   local starts = 0
   Player.start = function()
     starts = starts + 1
-    return { close = function() end }
+    return {
+      close = function(_, cb)
+        if cb then
+          cb()
+        end
+      end,
+    }
   end
   local station = model.station({
     stationuuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
