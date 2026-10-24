@@ -75,6 +75,41 @@ local function append_error_tail(text, line)
   return text
 end
 
+---Run a subprocess with a hard timeout; the timer kills it on expiry.
+---@param args string[]
+---@param timeout number seconds
+---@param cb fun(result: table, timed_out: boolean)
+---@return table|nil handle killable vim.system handle
+local function run_with_timeout(args, timeout, cb)
+  local done = false
+  local timer
+  local handle = vim.system(args, {}, function(result)
+    if done then
+      return
+    end
+    done = true
+    if timer and not timer:is_closing() then
+      timer:stop()
+      timer:close()
+    end
+    cb(result, false)
+  end)
+  timer = vim.uv.new_timer()
+  timer:start(math.max(1, math.floor((timeout or 5) * 1000)), 0, function()
+    timer:stop()
+    timer:close()
+    if done then
+      return
+    end
+    done = true
+    pcall(function()
+      handle:kill("sigkill")
+    end)
+    cb({ code = -1, stdout = "", stderr = "timeout" }, true)
+  end)
+  return handle
+end
+
 ---Run ffprobe against a URL or file.
 ---@param opts table {ffprobe, probe_timeout_secs}
 ---@param input string
@@ -103,11 +138,17 @@ function Recorder.probe(opts, input, timeout, cb)
     "-i",
     input,
   }
-  return vim.system(args, {}, function(result)
+  return run_with_timeout(args, timeout or 5, function(result, timed_out)
+    if timed_out then
+      cb("process_failed: ffprobe timeout", nil)
+      return
+    end
     if result.code ~= 0 then
-      local err = result.stderr and table.concat(result.stderr)
-        or ("ffprobe exit " .. tostring(result.code))
-      cb("process_failed: " .. util.trim(err), nil)
+      local err = util.trim(util.system_output(result.stderr))
+      if err == "" then
+        err = "ffprobe exit " .. tostring(result.code)
+      end
+      cb("process_failed: " .. err, nil)
       return
     end
     local ok, decoded = pcall(vim.json.decode, util.system_output(result.stdout))
@@ -117,44 +158,6 @@ function Recorder.probe(opts, input, timeout, cb)
     end
     cb(nil, decoded)
   end)
-end
-
----Blocking probe for recovery paths.
----@param opts table
----@param input string
----@param timeout number
----@return table|nil info, string|nil err
-function Recorder.probe_sync(opts, input, timeout)
-  local args = {
-    opts.ffprobe or "ffprobe",
-    "-v",
-    "error",
-    "-rw_timeout",
-    "5000000",
-    "-analyzeduration",
-    "1000000",
-    "-probesize",
-    "262144",
-    "-user_agent",
-    http.USER_AGENT,
-    "-select_streams",
-    "a:0",
-    "-show_entries",
-    "stream=codec_name,bit_rate:format=duration,bit_rate",
-    "-of",
-    "json",
-    "-i",
-    input,
-  }
-  local result = vim.system(args, {}):wait(timeout * 1000)
-  if result.code ~= 0 then
-    return nil, "process_failed: exit " .. tostring(result.code)
-  end
-  local ok, decoded = pcall(vim.json.decode, util.system_output(result.stdout))
-  if not ok then
-    return nil, "process_failed: invalid ffprobe json"
-  end
-  return decoded
 end
 
 ---Positive integer field from probe info (string or number).
@@ -490,13 +493,21 @@ function Recorder:finish(reason, cb)
     end)
   end
 
-  local function finalize()
+  -- Step 1: collect file facts, then verify asynchronously so the editor is
+  -- never blocked by ffprobe.
+  local finalize
+  local function collect()
     local stat = vim.uv.fs_stat(self.partial)
     self.record.size_bytes = stat and stat.size or 0
     self.record.stopped_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
     self.record.reconnects = self.reconnects
+    Recorder.probe(self.opts, self.partial, 2, function(_, verification)
+      finalize(verification)
+    end)
+  end
 
-    local verification = Recorder.probe_sync(self.opts, self.partial, 2)
+  -- Step 2: decide the outcome from the probe result and publish.
+  finalize = function(verification)
     if verification then
       local duration_text = verification.format and verification.format.duration
       local seconds = tonumber(duration_text)
@@ -588,11 +599,11 @@ function Recorder:finish(reason, cb)
     cb(self.record, nil)
   end
 
-  -- Finalization runs blocking probes, so it must leave the fast-event
-  -- context that libuv timers and stream callbacks provide.
+  -- Finalization leaves the fast-event context that libuv timers and stream
+  -- callbacks provide; the verification probe itself is asynchronous.
   local function after_stop()
     vim.schedule(function()
-      finalize()
+      collect()
     end)
   end
 
@@ -631,7 +642,7 @@ function Recorder.recover(store, opts)
   for _, record in ipairs(store:unfinished_recordings()) do
     local ok, err = pcall(function()
       if record.status == "finalizing" then
-        Recorder:_complete_finalization(store, record)
+        Recorder._complete_finalization(store, record)
         return
       end
       if record.status == "recording" then
