@@ -32,7 +32,7 @@ directory (one media session at a time).
 ==============================================================================
 2. REQUIREMENTS                                        *radio-requirements*
 
-- Neovim 0.10+ with LuaJIT (FFI is used for SQLite)
+- Neovim 0.10+ with LuaJIT (FFI is used for SQLite and session locking)
 - mpv, ffmpeg, ffprobe
 - libsqlite3 shared library
 - curl
@@ -103,6 +103,12 @@ Paths:~
   database         <data_dir>/radio.db
   recordings       <data_dir>/recordings/
   runtime          <data_dir>/run/
+  session lock     <data_dir>/run/media.lock
+
+The kernel flock is shared with radio-cli. Ownership ends when its holder
+exits or crashes; the lock file remains in place. single_instance=false
+disables exclusion. resume=true restores playback and the browsed source;
+resume="selection" restores only the source. resume=false restores neither.
 
 ==============================================================================
 6. COMMANDS                                                *radio-commands*
@@ -170,6 +176,11 @@ count. Interrupted recordings keep their partial file, are marked
 "interrupted", and are recovered on the next start. Switching stations ends
 the current recording. Pausing playback does not pause recording.
 
+Exit cancels pending catalog requests and probes, then gives recordings a
+bounded window to finish. Overdue recordings keep their partial file and
+recovery metadata. Storage and the session lock stay owned until outstanding
+recording writers and players have exited.
+
 ==============================================================================
 9. STATUSLINE                                            *radio-statusline*
 
@@ -186,6 +197,8 @@ All functions are lazy; nothing starts until first use.
 
 radio.setup(opts)                 Configure the plugin.
 radio.engine()                    Create (or fetch) the engine.
+engine:subscribe(callback)         Subscribe to status; returns unsubscribe.
+engine:shutdown()                  Stop tasks, reap children, close storage.
 radio.toggle()                    Toggle the browser.
 radio.play(target)                Play a UUID or http(s) URL.
 radio.stop()                      Stop playback.
@@ -220,6 +233,8 @@ radio.info(uuid)                  Station by UUID.
   NVIM_RADIO_TESTS=test_player nvim --headless -l tests/run.lua
 <
 Tests use an in-process HTTP server with real mpv/ffmpeg/ffprobe and a fake
-Radio Browser server.
+Radio Browser server, so the default suite needs no external network.
+Lock tests use separate Neovim processes; lifecycle tests cover cancelled
+probes, overlapping finalizers, forced child exit, and retained recovery data.
 
 vim:tw=78:ts=8:ft=help:norl:

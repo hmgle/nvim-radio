@@ -23,7 +23,7 @@ independent recording process. No account or API key is required.
 
 | Requirement | Notes |
 | --- | --- |
-| Neovim 0.10+ | LuaJIT build (FFI is used for SQLite) |
+| Neovim 0.10+ | LuaJIT build (FFI is used for SQLite and session locking) |
 | `mpv` | Playback, driven over its JSON IPC socket |
 | `ffmpeg`, `ffprobe` | Recording and stream probing |
 | `libsqlite3` | Shared library for the FFI binding |
@@ -147,6 +147,10 @@ require("radio").setup({
 })
 ```
 
+`resume = true` resumes the last station and browsed source; `"selection"`
+restores the source without starting playback. `false` starts with the station
+list and does not resume playback.
+
 The configuration is a Lua table rather than radio-cli's `config.toml`; the
 keys match radio-cli's TOML settings one-for-one. Global keymap names are
 `toggle`, `pause`, `mute`, `volume_up`, `volume_down`, `record`, `status`,
@@ -199,6 +203,11 @@ count. Interrupted recordings keep their partial file; they are marked
 `interrupted` and recovered on the next start. Switching stations ends the
 current recording. Pausing playback does not pause recording.
 
+On exit, pending catalog requests and recording probes are cancelled. Recordings
+get a bounded window to finish; overdue recordings keep their `.part` file and
+recovery metadata. The database and session lock remain owned until outstanding
+recording writers and players have exited.
+
 ## Lua API
 
 ```lua
@@ -242,8 +251,9 @@ NVIM_RADIO_TESTS=test_player nvim --headless -l tests/run.lua
 ```
 
 Tests use an in-process HTTP server and real `mpv`/`ffmpeg`/`ffprobe`; the
-directory tests use a fake Radio Browser server, so no network access is
-required except for optional live checks.
+directory tests use a fake Radio Browser server, so the default suite needs no
+network access. Lock tests launch separate Neovim processes; lifecycle tests
+exercise cancellation, forced child termination, and recovery.
 
 ## License
 

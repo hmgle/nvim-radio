@@ -141,6 +141,9 @@ require("radio").setup({
 })
 ```
 
+`resume = true` 恢复上次电台的播放和浏览来源；`"selection"` 只恢复来源，
+不开始播放；`false` 从电台列表开始，不恢复播放。
+
 配置为 Lua 表而非 radio-cli 的 `config.toml`，键名与 radio-cli 的 TOML 设置
 一一对应。全局键位名：`toggle`、`pause`、`mute`、`volume_up`、
 `volume_down`、`record`、`status`、`random`、`stop`，默认均不绑定。
@@ -189,6 +192,10 @@ JSON sidecar 记录电台、曲目、时间戳、编码、时长、大小与重�
 录音保留部分文件，标记为 `interrupted`，下次启动时恢复。切换电台会结束当前
 录音；暂停播放不会暂停录音。
 
+退出时会取消尚未完成的目录请求和录音探测，并给录音有限的收尾时间。
+超时录音保留 `.part` 文件与恢复元数据；数据库与会话锁会一直保留到相关
+录音写入进程和播放器退出。
+
 ## Lua API
 
 ```lua
@@ -230,7 +237,8 @@ NVIM_RADIO_TESTS=test_player nvim --headless -l tests/run.lua
 ```
 
 测试使用进程内 HTTP 服务器与真实 `mpv`/`ffmpeg`/`ffprobe`；目录测试使用
-本地假 Radio Browser 服务器，除可选的在线检查外无需网络。
+本地假 Radio Browser 服务器，默认测试无需外网。锁测试会启动独立的
+Neovim 进程，生命周期测试覆盖取消、强制终止子进程与恢复。
 
 ## 许可证
 
