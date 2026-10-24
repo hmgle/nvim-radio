@@ -100,6 +100,8 @@ function Player.start(opts, on_event, cb)
     audio_device = opts.audio_device,
     closing = false,
     _url = opts.url,
+    _start_callback = cb,
+    _close_callbacks = {},
   }, Player)
 
   local handle, pid = vim.uv.spawn(opts.mpv, {
@@ -118,14 +120,23 @@ function Player.start(opts, on_event, cb)
   local deadline = vim.uv.now() + 3000
   local function try_connect()
     local pipe = vim.uv.new_pipe()
+    self.connecting_pipe = pipe
     pipe:connect(socket, function(connect_err)
+      if self.connecting_pipe == pipe then
+        self.connecting_pipe = nil
+      end
+      if self.closing then
+        if not pipe:is_closing() then
+          pipe:close()
+        end
+        return
+      end
       if connect_err then
         if not pipe:is_closing() then
           pipe:close()
         end
         if vim.uv.now() >= deadline or self.closing or self.exited then
           self:_fail_start("player_startup")
-          cb("player_startup", nil)
           return
         end
         local timer = vim.uv.new_timer()
@@ -145,30 +156,38 @@ function Player.start(opts, on_event, cb)
       end
       self.pipe = pipe
       self:_on_connect()
-      cb(nil, self)
+      self:_complete_start(nil)
     end)
   end
   try_connect()
   return self
 end
 
+function Player:_complete_start(err)
+  local cb = self._start_callback
+  self._start_callback = nil
+  if cb then
+    self._started = err == nil
+    cb(err, err == nil and self or nil)
+  end
+end
+
 function Player:_fail_start(reason)
-  self:_kill()
-  vim.uv.fs_unlink(self.socket, function() end)
   self.startup_error = reason
+  self:_complete_start(reason)
+  self:close()
 end
 
 function Player:_on_exit(code, signal)
   self.exited = true
-  if self.closing then
-    -- mpv honored the quit command: finish the close without waiting for the
-    -- SIGKILL fallback.
-    if self._finish then
-      self:_finish()
-    end
-    return
+  if self.handle and not self.handle:is_closing() then
+    self.handle:close()
   end
-  if self.on_event then
+  if self.closing then
+    self:_finish_close()
+  elseif not self._started then
+    self:_fail_start("player_startup")
+  elseif self.on_event then
     self.on_event({ type = "exited", code = code, signal = signal })
   end
 end
@@ -298,59 +317,77 @@ function Player:load(url)
 end
 
 function Player:_kill()
-  if self.handle and not self.handle:is_closing() then
+  if not self.exited and self.handle and not self.handle:is_closing() then
     pcall(vim.uv.process_kill, self.handle, "sigkill")
   end
 end
 
 ---Ask mpv to quit, escalate to SIGKILL, and remove the socket.
 ---@param cb function|nil
+local function close_timer(timer)
+  if timer and not timer:is_closing() then
+    timer:stop()
+    timer:close()
+  end
+end
+
+function Player:_finish_close()
+  if self._closed then
+    return
+  end
+  self._closed = true
+  close_timer(self.close_timer)
+  close_timer(self.connect_timer)
+  self.close_timer, self.connect_timer = nil, nil
+  for _, pipe in pairs({ self.pipe, self.connecting_pipe }) do
+    if not pipe:is_closing() then
+      pipe:read_stop()
+      pipe:close()
+    end
+  end
+  self.connecting_pipe = nil
+  self.pipe_closed = true
+  vim.uv.fs_unlink(self.socket, function() end)
+  local callbacks = self._close_callbacks
+  self._close_callbacks = {}
+  for _, cb in ipairs(callbacks) do
+    cb()
+  end
+end
+
 function Player:close(cb)
-  if self.closing then
+  if self._closed then
     if cb then
       cb()
     end
     return
   end
-  self.closing = true
-  local finished = false
-  local function finish()
-    if finished then
-      return
-    end
-    finished = true
-    if self.close_timer and not self.close_timer:is_closing() then
-      self.close_timer:stop()
-      self.close_timer:close()
-      self.close_timer = nil
-    end
-    if self.connect_timer and not self.connect_timer:is_closing() then
-      self.connect_timer:stop()
-      self.connect_timer:close()
-      self.connect_timer = nil
-    end
-    if self.pipe and not self.pipe:is_closing() then
-      self.pipe:read_stop()
-      self.pipe:close()
-    end
-    self.pipe_closed = true
-    vim.uv.fs_unlink(self.socket, function() end)
-    if cb then
-      cb()
-    end
+  if cb then
+    self._close_callbacks[#self._close_callbacks + 1] = cb
   end
-  -- The quit command must reach mpv before the closing guard engages, so it is
-  -- sent while the pipe is still open; SIGKILL is the fallback after 800 ms.
+  if self.closing then
+    return
+  end
+  self.closing = true
+  close_timer(self.connect_timer)
+  self.connect_timer = nil
+  self:_complete_start("cancelled")
+  if self.exited then
+    self:_finish_close()
+    return
+  end
   if self.pipe and not self.pipe:is_closing() then
     self.pipe:read_stop()
     self:command({ "quit" })
-  end
-  self._finish = finish
-  self.close_timer = vim.uv.new_timer()
-  self.close_timer:start(800, 0, function()
+    self.close_timer = vim.uv.new_timer()
+    self.close_timer:start(800, 0, function()
+      close_timer(self.close_timer)
+      self.close_timer = nil
+      self:_kill()
+    end)
+  else
     self:_kill()
-    finish()
-  end)
+  end
 end
 
 ---List mpv audio output devices.

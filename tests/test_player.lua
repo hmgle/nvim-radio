@@ -95,6 +95,62 @@ return function()
   H.wait_for(2000, function()
     return vim.uv.fs_stat(player.socket) == nil
   end, "socket removed")
+  H.eq(player.handle:is_closing(), true, "mpv process handle closes after exit")
+  local function process_count()
+    local count = 0
+    vim.uv.walk(function(handle)
+      if handle:get_type() == "process" and not handle:is_closing() then
+        count = count + 1
+      end
+    end)
+    return count
+  end
+  local baseline = process_count()
+  for _ = 1, 3 do
+    local ready, done = false, false
+    local p = assert(
+      player_mod.start(
+        { mpv = "mpv", runtime_dir = config.options.runtime_dir, url = url .. "/fixture.mp3" },
+        function() end,
+        function(err)
+          ready = err == nil
+        end
+      )
+    )
+    H.wait_for(5000, function()
+      return ready
+    end, "repeated player connects")
+    p:close(function()
+      done = true
+    end)
+    H.wait_for(3000, function()
+      return done
+    end, "repeated player is reaped")
+  end
+  H.eq(process_count(), baseline, "repeated playback does not leak process handles")
+  local cancel_callbacks = 0
+  local connecting = assert(
+    player_mod.start(
+      { mpv = "mpv", runtime_dir = config.options.runtime_dir, url = url .. "/fixture.mp3" },
+      function() end,
+      function(err)
+        cancel_callbacks = cancel_callbacks + 1
+        H.eq(err, "cancelled", "startup cancellation completes with an error")
+      end
+    )
+  )
+  local closes = 0
+  connecting:close(function()
+    closes = closes + 1
+  end)
+  connecting:close(function()
+    closes = closes + 1
+  end)
+  H.wait_for(3000, function()
+    return closes == 2
+  end, "all close waiters run after exit")
+  H.eq(cancel_callbacks, 1, "startup callback completes exactly once")
+  H.eq(process_count(), baseline, "cancelled startup releases its process handle")
   -- Missing binary surfaces a dependency error.
   local missing_error = "unset"
   player_mod.start({
