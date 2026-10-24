@@ -73,6 +73,54 @@ return function()
   browser:cycle_sort()
   H.check(browser.filter.sort ~= first_sort, "sort cycles")
 
+  -- Pagination moves through the result set and clamps at the ends.
+  for i = 1, 130 do
+    engine.store:upsert(model.station({
+      stationuuid = string.format("%08d-1111-4111-8111-%012d", i, i),
+      name = "台 " .. i,
+      url = "https://example.com/" .. i,
+      countrycode = "fr",
+      language = "french",
+      tags = "jazz",
+      bitrate = 128,
+      clickcount = i,
+      active = true,
+    }))
+  end
+  browser.source = "stations"
+  browser.filter.query = ""
+  browser.filter.offset = 0
+  browser:refresh()
+  local function header()
+    return vim.api.nvim_buf_get_lines(browser.buf, 0, 1, false)[1]
+  end
+  local total = browser.total
+  H.check(total > 100, "more than one page of results")
+  local last_start = math.floor((total - 1) / 100) * 100 + 1
+  H.check(header():find("1-100/" .. total, 1, true), "first page range")
+  browser:page(1)
+  H.check(header():find(last_start .. "-" .. total .. "/" .. total, 1, true), "last page range")
+  browser:page(1)
+  H.check(
+    header():find(last_start .. "-" .. total .. "/" .. total, 1, true),
+    "paging clamps at the last page"
+  )
+  browser:page(-1)
+  browser:page(-1)
+  H.check(header():find("1-100/" .. total, 1, true), "paging returns to the first page")
+
+  -- Engine status updates rewrite the header (fast-event safe).
+  engine.status.playback_state = "playing"
+  engine.status.station = model.station({ name = "Live 台" })
+  engine:emit()
+  H.wait_for(2000, function()
+    return header():find("playing") ~= nil
+  end, "header follows engine status")
+
+  -- Source selection is persisted for resume="selection".
+  browser:cycle_source(1)
+  H.eq(engine.store:meta("pref_source"), browser.source, "source preference persisted")
+
   -- Status HUD opens.
   local hud_buf = require("radio.ui.status").hud(engine)
   H.check(hud_buf ~= nil and vim.api.nvim_buf_is_valid(hud_buf), "hud buffer created")

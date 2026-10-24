@@ -17,6 +17,8 @@ local suites = {
   "test_directory",
   "test_engine",
   "test_ui",
+  "test_regressions",
+  "test_commands",
 }
 
 local only = vim.env.NVIM_RADIO_TESTS

@@ -64,17 +64,24 @@ return function()
     request_timeout_secs = 5,
   })
 
-  -- Discovery filters to radio-browser hosts.
+  -- Discovery against the live all.api mirror is informational only: the
+  -- network is not a test dependency, and a configured api_url bypasses it.
   local discovery = Directory.new({ connect_timeout_secs = 2, request_timeout_secs = 5 })
-  local discovered = nil
+  local discovered, discover_err = nil, nil
   discovery:discover(function(err, servers)
-    discovered = servers
+    discovered, discover_err = servers, err
   end)
-  H.wait_for(8000, function()
-    return discovered ~= nil
-  end, "server discovery completes")
-  -- discovery used the real all.api endpoint; just check it returned a list or an error.
-  H.check(type(discovered) == "table" or discovered == nil, "discovery returns a table")
+  H.wait_for(15000, function()
+    return discovered ~= nil or discover_err ~= nil
+  end, "server discovery returns or fails")
+  if discovered then
+    H.check(#discovered > 0, "discovered at least one server")
+    for _, server in ipairs(discovered) do
+      H.check(server:sub(1, 8) == "https://", "discovered server uses https: " .. server)
+    end
+  else
+    io.write("note: live discovery unavailable (" .. tostring(discover_err) .. ")\n")
+  end
 
   -- Bootstrap seeds the catalog.
   local bootstrapped = nil

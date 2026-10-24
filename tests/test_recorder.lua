@@ -43,6 +43,26 @@ return function()
   end, "ffprobe succeeds")
   H.eq(codec, "mp3", "probed codec is mp3")
 
+  -- A failing ffprobe must report through the callback, not crash it.
+  local probe_failed = false
+  Recorder.probe(opts, "http://127.0.0.1:1/missing.mp3", 2, function(err, info)
+    probe_failed = err ~= nil and info == nil
+  end)
+  H.wait_for(15000, function()
+    return probe_failed
+  end, "failing ffprobe reports an error")
+
+  -- A stalled ffprobe is killed by its timeout instead of hanging.
+  local stalled_url, stalled_stop = H.start_blackhole()
+  local timed_out = false
+  Recorder.probe(opts, stalled_url, 1, function(err)
+    timed_out = err ~= nil and err:find("timeout") ~= nil
+  end)
+  H.wait_for(10000, function()
+    return timed_out
+  end, "ffprobe timeout enforced")
+  stalled_stop()
+
   -- Codec mapping.
   local ext, muxer = model.format_for_codec("mp3")
   H.eq(ext, "mp3", "mp3 extension")

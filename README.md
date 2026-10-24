@@ -69,7 +69,8 @@ require("radio").setup({ volume = 80 })
 ```
 
 The browser opens with the current filters applied. Press `i` to search, `F`
-to filter, `Enter` to play, `r` to record, `q` to close. `:RadioSync`
+to filter, `Enter` to play, `r` to record, `q` to close. Results are paged
+(`L` / `H`), and the header tracks playback and recording live. `:RadioSync`
 downloads the catalog in pages of 1000 stations and publishes it atomically;
 a shrink larger than 25 % is rejected unless confirmed.
 
@@ -86,6 +87,7 @@ a shrink larger than 25 % is rejected unless confirmed.
 | `r` | Start / stop recording the playing station |
 | `R` / `F5` | Sync the catalog / refresh the list |
 | `[` / `]` | Previous / next source: stations, favorites, history, custom, recordings |
+| `L` / `H`, `PageDown` / `PageUp` | Next / previous page of results |
 | `y` / `Y` | Yank the UUID / stream URL (or recording ID / path) |
 | `d` | Delete a recording (with confirmation) |
 | `O` | Open the recordings directory |

@@ -5,8 +5,8 @@ local H = require("tests.helpers")
 return function()
   local config = require("radio.config")
   local Engine = require("radio.engine")
+  local Store = require("radio.store")
   local model = require("radio.model")
-
   local dir = H.tmpdir("engine")
   config.setup({ data_dir = dir, recording_min_free_mb = 1, auto_sync_days = 0 })
   local mp3 = H.make_mp3(dir, 30)
@@ -146,5 +146,28 @@ return function()
     return engine3:playing()
   end, "random plays a custom station")
   engine3:stop_playback()
+
+  -- Shutdown must let an in-flight recording finish publishing before the
+  -- database goes away.
+  engine3:play(station.stationuuid)
+  H.wait_for(8000, function()
+    return engine3:playing()
+  end, "playing before shutdown test")
+  engine3:toggle_recording()
+  H.wait_for(15000, function()
+    return engine3.status.recording_state == "recording"
+  end, "recording starts for shutdown test")
+  vim.wait(2500, function()
+    return false
+  end)
   engine3:shutdown()
+  local reopened = assert(Store.open(dir .. "/radio.db"))
+  local shutdown_records = reopened:recordings()
+  H.check(#shutdown_records >= 1, "recording persisted across shutdown")
+  local last = shutdown_records[1]
+  H.check(last.status ~= "recording", "recording finalized before shutdown returns")
+  H.check(last.size_bytes > 0, "finalized recording kept its audio")
+  H.eq(#reopened:unfinished_recordings(), 0, "nothing pending after shutdown")
+  H.check(last.final_path ~= nil, "final_path persisted through shutdown")
+  reopened:close()
 end

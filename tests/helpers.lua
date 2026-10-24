@@ -149,6 +149,23 @@ function M.start_loop_server(path)
   end
 end
 
+---Accept connections and never answer; used to exercise timeouts.
+---@return string url, function stop
+function M.start_blackhole()
+  local server = assert(vim.uv.new_tcp())
+  server:bind("127.0.0.1", 0)
+  server:listen(4, function()
+    local client = vim.uv.new_tcp()
+    server:accept(client)
+    -- Deliberately silent: hold the connection open.
+    client:read_start(function() end)
+  end)
+  local port = server:getsockname().port
+  return "http://127.0.0.1:" .. port .. "/slow.mp3", function()
+    server:close()
+  end
+end
+
 ---Create a short MP3 fixture with FFmpeg.
 ---@param dir string
 ---@param seconds integer

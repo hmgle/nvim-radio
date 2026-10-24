@@ -358,7 +358,7 @@ function Engine:play(target)
   end
   local station = model.station({
     stationuuid = util.uuid_v4(),
-    name = util.clean_text(util.host_path(target)):sub(1, 60),
+    name = util.truncate(util.clean_text(util.host_path(target)), 60),
     url = target,
     url_resolved = target,
     custom = true,
@@ -497,6 +497,10 @@ end
 
 ---@param event table
 function Engine:_on_player_event(event)
+  if not self.store then
+    -- Shut down: late mpv events have nowhere to go.
+    return
+  end
   local kind = event.type
   if kind == "playing" then
     self.reconnect_attempts = 0
@@ -539,6 +543,9 @@ end
 
 ---First successful playback of a station: history, resume, click report.
 function Engine:_on_confirmed()
+  if not self.store then
+    return
+  end
   local station = self.status.station
   if not station or self.session_started or self.source_kind == "local" then
     return
@@ -701,6 +708,9 @@ end
 
 ---@param delta integer
 function Engine:volume(delta)
+  if not self.store then
+    return
+  end
   local value = math.floor(util.clamp(self.status.volume + delta, 0, 100))
   if self.player then
     self.player:volume(value - self.status.volume)
@@ -772,6 +782,9 @@ end
 ---------------------------------------------------------------------------
 
 function Engine:toggle_recording()
+  if not self.store then
+    return
+  end
   if self.recorder or self.recording_probe then
     self:stop_recording(nil)
     return
@@ -782,6 +795,9 @@ end
 ---@param duration integer|nil seconds
 ---@param dir string|nil
 function Engine:record_current(duration, dir)
+  if not self.store then
+    return
+  end
   if self.source_kind == "local" then
     self:_fail_recording("local_recording")
     return

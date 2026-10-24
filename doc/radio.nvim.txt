@@ -147,6 +147,7 @@ r                        Start / stop recording.
 R, F5                    Sync the catalog / refresh the list.
 [, ]                     Previous / next source: stations, favorites,
                          history, custom, recordings.
+L, H, PageDown, PageUp   Next / previous page of results.
 y, Y                     Yank the UUID / stream URL (or recording ID / path).
 d                        Delete a recording (with confirmation).
 O                        Open the recordings directory.

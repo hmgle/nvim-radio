@@ -11,6 +11,10 @@ UI._browser = nil
 ---@param opts table|nil
 ---@return table|nil engine, string|nil err
 function UI.engine(opts)
+  if UI._engine and not UI._engine.store then
+    -- A previous engine in this process was shut down; start a fresh one.
+    UI._engine = nil
+  end
   if UI._engine then
     return UI._engine
   end
