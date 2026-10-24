@@ -67,9 +67,10 @@ function Browser:open()
   vim.api.nvim_win_set_buf(self.win, self.buf)
   self:_set_keymaps()
   vim.api.nvim_create_autocmd("WinClosed", {
-    buffer = self.buf,
+    pattern = tostring(self.win),
     once = true,
     callback = function()
+      self:_unsubscribe()
       self.win = nil
       self.buf = nil
       if self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
@@ -84,9 +85,17 @@ function Browser:open()
       self:_render_preview()
     end,
   })
-  self.engine:subscribe(function()
-    if self.buf and vim.api.nvim_buf_is_valid(self.buf) then
-      self:_render_header()
+  self.catalog_revision = self.engine.catalog_revision
+  self.unsubscribe = self.engine:subscribe(function()
+    if self.engine.stopping then
+      self:close()
+    elseif self.buf and vim.api.nvim_buf_is_valid(self.buf) then
+      if self.catalog_revision ~= self.engine.catalog_revision then
+        self.catalog_revision = self.engine.catalog_revision
+        self:refresh()
+      else
+        self:_render_header()
+      end
     end
   end)
   self:refresh()
@@ -102,7 +111,15 @@ function Browser:_render_header()
   vim.bo[self.buf].modifiable = false
 end
 
+function Browser:_unsubscribe()
+  if self.unsubscribe then
+    self.unsubscribe()
+    self.unsubscribe = nil
+  end
+end
+
 function Browser:close()
+  self:_unsubscribe()
   if self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
     vim.api.nvim_win_close(self.preview_win, true)
     self.preview_win = nil
@@ -214,6 +231,10 @@ function Browser:refresh()
     return
   end
   if not self.buf or not vim.api.nvim_buf_is_valid(self.buf) then
+    return
+  end
+  if self.engine.stopping or not self.engine.store then
+    self:close()
     return
   end
   local filter = self.filter

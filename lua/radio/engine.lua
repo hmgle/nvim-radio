@@ -61,7 +61,7 @@ function Engine.new(opts)
     end
     return nil, store_err
   end
-  local resume_source = store:meta("pref_source")
+  local resume_source = o.resume and store:meta("pref_source") or nil
   local resume_station = nil
   if o.resume == true or o.resume == "selection" then
     resume_station = store:meta("pref_last_station")
@@ -77,6 +77,7 @@ function Engine.new(opts)
     resume_source = resume_source,
     resume_station = resume_station,
     refresh_count = 0,
+    catalog_revision = 0,
     finalizers = {},
     retiring_players = {},
     directory = directory.new({
@@ -150,12 +151,18 @@ function Engine:_auto_sync()
   local o = config.options
   if self.store:count() == 0 then
     self.status.message = "catalog empty; bootstrapping"
+    self.syncing = true
     self.directory:bootstrap(self.store, function(err, count)
+      if self.stopping then
+        return
+      end
+      self.syncing = false
       if err then
         self.status.message = "bootstrap failed: " .. err
         self:emit()
         return
       end
+      self.catalog_revision = self.catalog_revision + 1
       self.status.message = "catalog ready: " .. tostring(count) .. " stations"
       self:emit()
     end)
@@ -165,17 +172,26 @@ function Engine:_auto_sync()
 end
 
 ---@param fn fun(status: table)
+---@return function unsubscribe
 function Engine:subscribe(fn)
-  self.listeners[#self.listeners + 1] = fn
+  local subscription = {}
+  self.listeners[subscription] = fn
+  return function()
+    self.listeners[subscription] = nil
+  end
 end
 
----Events can arrive from fast-event contexts (libuv callbacks), so listeners
----always run on the main loop.
+---Snapshot subscribers and state at emission; unsubscribed listeners must
+---not receive already-queued events, and new listeners cannot receive old ones.
 function Engine:emit()
   local snapshot = vim.deepcopy(self.status)
+  local subscriptions = vim.tbl_keys(self.listeners)
   vim.schedule(function()
-    for _, fn in ipairs(self.listeners) do
-      pcall(fn, snapshot)
+    for _, subscription in ipairs(subscriptions) do
+      local fn = self.listeners[subscription]
+      if fn then
+        pcall(fn, snapshot)
+      end
     end
   end)
 end
@@ -257,7 +273,11 @@ function Engine:_tick_recording()
     return
   end
   local ended, elapsed = self.recorder:poll()
+  local changed = math.floor(elapsed / 1000) ~= math.floor(self.status.recording_ms / 1000)
   self.status.recording_ms = elapsed
+  if changed then
+    self:emit()
+  end
   if ended then
     self:stop_recording(nil)
   end
@@ -959,6 +979,7 @@ function Engine:sync(opts, cb)
     if err then
       self:_say("sync failed: " .. err)
     else
+      self.catalog_revision = self.catalog_revision + 1
       self:_say("catalog synced: " .. tostring(report and report.unique or 0) .. " stations")
     end
     if cb then

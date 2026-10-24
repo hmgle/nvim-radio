@@ -128,5 +128,79 @@ return function()
   browser:close()
   H.eq(browser.win, nil, "browser closed")
 
+  H.eq(vim.tbl_count(engine.listeners), 0, "closing browser unsubscribes")
+  local renders = 0
+  local original_header = browser._render_header
+  browser._render_header = function(self)
+    renders = renders + 1
+    original_header(self)
+  end
+  for _ = 1, 3 do
+    browser:open()
+    H.eq(vim.tbl_count(engine.listeners), 1, "one subscription while browser is open")
+    browser:close()
+  end
+  browser:open()
+  engine:emit()
+  H.wait_for(1000, function()
+    return renders > 0
+  end, "open browser receives events")
+  H.eq(renders, 1, "reopening does not multiply redraws")
+  vim.api.nvim_win_close(browser.win, true)
+  H.eq(vim.tbl_count(engine.listeners), 0, "manual window close unsubscribes")
+  local received = 0
+  local unsubscribe = engine:subscribe(function()
+    received = received + 1
+  end)
+  engine:emit()
+  unsubscribe()
+  vim.wait(20, function()
+    return false
+  end)
+  H.eq(received, 0, "unsubscribe suppresses queued events")
+
   engine:shutdown()
+  local reopened = assert(ui.engine({ auto_sync = false }))
+  local fresh_browser = assert(ui.browser())
+  H.check(fresh_browser ~= browser, "engine replacement creates a fresh browser")
+  H.eq(fresh_browser.engine, reopened, "fresh browser uses the current engine")
+  H.eq(fresh_browser.source, "stations", "resume=false does not restore the previous source")
+  fresh_browser:open()
+  H.check(#fresh_browser.items > 0, "recreated browser queries the new store")
+  fresh_browser:close()
+  reopened:shutdown()
+  radio.setup({ data_dir = dir, resume = "selection", auto_sync_days = 0 })
+  local selected = assert(ui.engine({ auto_sync = false }))
+  H.eq(ui.browser().source, "favorites", "selection resume restores the saved source")
+  selected:shutdown()
+
+  -- First-run bootstrap must populate an already-open empty browser.
+  local Directory = require("radio.directory")
+  local original_bootstrap = Directory.bootstrap
+  local bootstrap
+  Directory.bootstrap = function(self, store, cb)
+    bootstrap = function()
+      store:bootstrap({
+        model.station({
+          stationuuid = "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          name = "Bootstrap",
+          url = "https://example.test/live",
+          active = true,
+        }),
+      })
+      cb(nil, 1)
+    end
+  end
+  radio.setup({ data_dir = H.tmpdir("ui-bootstrap"), auto_sync_days = 0 })
+  local initial = assert(ui.engine())
+  local empty = assert(ui.browser())
+  empty:open()
+  H.eq(#empty.items, 0, "browser opens before bootstrap response")
+  bootstrap()
+  H.wait_for(1000, function()
+    return #empty.items == 1
+  end, "bootstrap updates the open result list")
+  empty:close()
+  initial:shutdown()
+  Directory.bootstrap = original_bootstrap
 end

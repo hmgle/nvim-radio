@@ -60,6 +60,7 @@ function Status.hud(engine)
   local width = math.min(72, math.max(40, math.floor(vim.o.columns * 0.5)))
   local height = #lines
   local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   local win = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
