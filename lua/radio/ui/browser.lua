@@ -37,9 +37,14 @@ end
 ---@return table
 function Browser.new(engine)
   local ui = config.options.ui
+  -- resume="selection" restores the source the user last browsed.
+  local source = "stations"
+  if engine.resume_source and vim.tbl_contains(SOURCES, engine.resume_source) then
+    source = engine.resume_source
+  end
   return setmetatable({
     engine = engine,
-    source = "stations",
+    source = source,
     filter = model.filter({}),
     items = {},
     total = 0,
@@ -79,7 +84,22 @@ function Browser:open()
       self:_render_preview()
     end,
   })
+  self.engine:subscribe(function()
+    if self.buf and vim.api.nvim_buf_is_valid(self.buf) then
+      self:_render_header()
+    end
+  end)
   self:refresh()
+end
+
+---Rewrite only the header line (engine status changes arrive frequently).
+function Browser:_render_header()
+  if not self.buf or not vim.api.nvim_buf_is_valid(self.buf) then
+    return
+  end
+  vim.bo[self.buf].modifiable = true
+  vim.api.nvim_buf_set_lines(self.buf, 0, 1, false, { self:_header() })
+  vim.bo[self.buf].modifiable = false
 end
 
 function Browser:close()
@@ -163,6 +183,18 @@ function Browser:_set_keymaps()
   map("]", function()
     self:cycle_source(1)
   end, "Next source")
+  map("L", function()
+    self:page(1)
+  end, "Next page")
+  map("H", function()
+    self:page(-1)
+  end, "Previous page")
+  map("<PageDown>", function()
+    self:page(1)
+  end, "Next page")
+  map("<PageUp>", function()
+    self:page(-1)
+  end, "Previous page")
   map("q", function()
     self:close()
   end, "Close")
@@ -173,6 +205,14 @@ end
 
 ---Query the store for the current source and redraw.
 function Browser:refresh()
+  -- HTTP and libuv callbacks arrive in fast-event contexts where the Neovim
+  -- API is unavailable; defer to the main loop.
+  if vim.in_fast_event() then
+    vim.schedule(function()
+      self:refresh()
+    end)
+    return
+  end
   if not self.buf or not vim.api.nvim_buf_is_valid(self.buf) then
     return
   end
@@ -214,7 +254,13 @@ end
 ---@return string
 function Browser:_header()
   local parts = { "[" .. self.source .. "]" }
-  parts[#parts + 1] = string.format("%d/%d", #self.items, self.total)
+  local first = self.filter.offset + 1
+  local last = self.filter.offset + #self.items
+  if #self.items == 0 then
+    parts[#parts + 1] = string.format("0/%d", self.total)
+  else
+    parts[#parts + 1] = string.format("%d-%d/%d", first, last, self.total)
+  end
   if self.filter.query ~= "" then
     parts[#parts + 1] = 'query="' .. self.filter.query .. '"'
   end
@@ -254,8 +300,8 @@ function Browser:_lines()
       lines[#lines + 1] = string.format(
         "%3d. %-28s %-22s %-11s %8s %s",
         index,
-        util.trim(r.station_name):sub(1, 28),
-        util.trim(r.track or ""):sub(1, 22),
+        util.truncate(util.trim(r.station_name), 28),
+        util.truncate(util.trim(r.track or ""), 22),
         r.status,
         util.fmt_bytes(r.size_bytes),
         (r.started_at or ""):gsub("T", " "):sub(1, 19)
@@ -265,7 +311,7 @@ function Browser:_lines()
       lines[#lines + 1] = string.format(
         "%3d. %-34s %-5s %6s %-9s %s",
         index,
-        util.trim(s.name):sub(1, 34),
+        util.truncate(util.trim(s.name), 34),
         (s.countrycode or ""):upper():sub(1, 5),
         s.bitrate > 0 and (s.bitrate .. "k") or "?",
         (s.codec or ""):sub(1, 9),
@@ -385,7 +431,20 @@ function Browser:cycle_source(delta)
   end
   self.source = SOURCES[((index + delta - 1) % #SOURCES) + 1]
   self.filter.offset = 0
+  self.engine.store:set_meta("pref_source", self.source)
   self:refresh()
+end
+
+---Move through the result set one page at a time.
+---@param delta integer
+function Browser:page(delta)
+  local step = self.filter.limit
+  local last_page = math.floor(math.max(0, self.total - 1) / step) * step
+  local offset = util.clamp(self.filter.offset + delta * step, 0, last_page)
+  if offset ~= self.filter.offset then
+    self.filter.offset = offset
+    self:refresh()
+  end
 end
 
 function Browser:random()

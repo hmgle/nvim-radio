@@ -14,6 +14,7 @@ function UI.engine(opts)
   if UI._engine then
     return UI._engine
   end
+  require("radio.config").ensure()
   local Engine = require("radio.engine")
   local engine, err = Engine.new(opts)
   if not engine then

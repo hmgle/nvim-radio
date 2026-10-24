@@ -58,11 +58,17 @@ end, { nargs = 1, desc = "Set or adjust volume" })
 vim.api.nvim_create_user_command("RadioRecord", function(info)
   local args = vim.split(vim.trim(info.args), "%s+")
   local duration, dir = nil, nil
-  for index, arg in ipairs(args) do
+  local index = 1
+  while index <= #args do
+    local arg = args[index]
     if arg == "--output-dir" then
       dir = args[index + 1]
+      index = index + 2
     elseif arg ~= "" then
       duration = arg
+      index = index + 1
+    else
+      index = index + 1
     end
   end
   require("radio").record(duration, dir)
@@ -102,16 +108,21 @@ vim.api.nvim_create_user_command("RadioFavorites", function(info)
   local args = vim.split(vim.trim(info.args), "%s+")
   local radio = require("radio")
   local action = args[1] or "list"
-  if action == "add" or action == "remove" then
-    radio.favorite_toggle(args[2])
-  else
-    local stations = radio.favorites()
-    local lines = {}
-    for _, station in ipairs(stations) do
-      lines[#lines + 1] = station.stationuuid .. "  " .. station.name
-    end
-    vim.notify("[radio] favorites (" .. #stations .. ")\n" .. table.concat(lines, "\n"))
+  if (action == "add" or action == "remove") and args[2] then
+    radio.favorite_set(args[2], action == "add")
+    vim.notify("[radio] " .. (action == "add" and "added " or "removed ") .. args[2])
+    return
   end
+  if action == "add" or action == "remove" then
+    vim.notify("[radio] usage: RadioFavorites add|remove <UUID>", vim.log.levels.ERROR)
+    return
+  end
+  local stations = radio.favorites()
+  local lines = {}
+  for _, station in ipairs(stations) do
+    lines[#lines + 1] = station.stationuuid .. "  " .. station.name
+  end
+  vim.notify("[radio] favorites (" .. #stations .. ")\n" .. table.concat(lines, "\n"))
 end, { nargs = "*", desc = "List favorites or add/remove one" })
 
 vim.api.nvim_create_user_command("RadioHistory", function()

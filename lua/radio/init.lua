@@ -142,6 +142,14 @@ function M.favorite_toggle(uuid)
   return engine.store:toggle_favorite(uuid)
 end
 
+---Add or remove a favorite explicitly.
+---@param uuid string
+---@param want boolean
+---@return boolean changed
+function M.favorite_set(uuid, want)
+  local engine = assert(M.engine())
+  return engine.store:set_favorite(uuid, want)
+end
 ---@param filter table|nil
 ---@return table[] stations
 function M.favorites(filter)

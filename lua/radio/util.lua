@@ -219,6 +219,37 @@ function M.escape_like(s)
   return (s:gsub("([%%%_\\])", "\\%1"))
 end
 
+---Truncate to `max_chars` UTF-8 characters, appending an ellipsis when cut.
+---Byte slicing would split multibyte characters.
+---@param s string|nil
+---@param max_chars integer
+---@return string
+function M.truncate(s, max_chars)
+  s = type(s) == "string" and s or ""
+  if max_chars <= 0 then
+    return ""
+  end
+  local count = 0
+  local i, len = 1, #s
+  while i <= len do
+    local b = s:byte(i)
+    local width = 1
+    if b >= 0xf0 then
+      width = 4
+    elseif b >= 0xe0 then
+      width = 3
+    elseif b >= 0xc0 then
+      width = 2
+    end
+    count = count + 1
+    if count > max_chars then
+      return s:sub(1, i - 1) .. "…"
+    end
+    i = i + width
+  end
+  return s
+end
+
 ---Format milliseconds as M:SS or H:MM:SS.
 ---@param ms integer
 ---@return string

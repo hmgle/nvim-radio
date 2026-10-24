@@ -732,6 +732,30 @@ function Store:toggle_favorite(uuid)
   return added
 end
 
+---Add or remove a favorite explicitly (radio-cli's favorite(uuid, add)).
+---@param uuid string
+---@param want boolean
+---@return boolean changed
+function Store:set_favorite(uuid, want)
+  local rows = self._db:execute("SELECT 1 FROM stations WHERE uuid=?1", { uuid })
+  if not rows[1] then
+    error("station_not_found", 2)
+  end
+  local existed = self._db:execute("SELECT 1 FROM favorites WHERE uuid=?1", { uuid })[1] ~= nil
+  if want and not existed then
+    self._db:execute(
+      "INSERT INTO favorites(uuid,created_at) VALUES (?1,?2)",
+      { uuid, os.date("!%Y-%m-%dT%H:%M:%SZ") }
+    )
+    return true
+  end
+  if not want and existed then
+    self._db:execute("DELETE FROM favorites WHERE uuid=?1", { uuid })
+    return true
+  end
+  return false
+end
+
 ---Record a successful play; history keeps the newest 1000 rows.
 ---@param uuid string
 function Store:played(uuid)
