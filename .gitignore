@@ -1,0 +1,8 @@
+# Test scratch data
+/test-tmp/
+# Editor
+*.swp
+# Generated helptags
+doc/tags
+# StepCode harness state
+.stepcode/

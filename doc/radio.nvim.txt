@@ -1,0 +1,224 @@
+*radio.nvim.txt*  A terminal radio player for Neovim
+
+Author:  nvim-radio contributors
+License: MIT (see LICENSE); bundled territory names under the Unicode License
+
+CONTENTS                                                    *radio* *radio.nvim*
+
+    1. Introduction ................ |radio-introduction|
+    2. Requirements ................ |radio-requirements|
+    3. Installation ................ |radio-installation|
+    4. Quick start ................. |radio-quick-start|
+    5. Configuration ............... |radio-configuration|
+    6. Commands .................... |radio-commands|
+    7. Browser keys ................ |radio-browser-keys|
+    8. Recording ................... |radio-recording|
+    9. Statusline .................. |radio-statusline|
+   10. API ......................... |radio-api|
+   11. Development ................. |radio-development|
+
+==============================================================================
+1. INTRODUCTION                                        *radio-introduction*
+
+nvim-radio is a terminal radio player for Neovim modeled on radio-cli. A
+Neovim Lua plugin is the controller, mpv is an independent playback process,
+and ffmpeg is an independent recording process. It browses the Radio Browser
+catalog, searches locally, plays HTTP(S) streams, and records them as stream
+copies with crash recovery.
+
+The SQLite schema matches radio-cli's, so both tools can share a data
+directory (one media session at a time).
+
+==============================================================================
+2. REQUIREMENTS                                        *radio-requirements*
+
+- Neovim 0.10+ with LuaJIT (FFI is used for SQLite)
+- mpv, ffmpeg, ffprobe
+- libsqlite3 shared library
+- curl
+
+Run |:RadioDoctor| to verify the host.
+
+==============================================================================
+3. INSTALLATION                                        *radio-installation*
+
+lazy.nvim: >lua
+  {
+    "hmgle/nvim-radio",
+    opts = { volume = 80 },
+    cmd = { "Radio", "RadioPlay", "RadioSync", "RadioRecord" },
+  }
+<
+mini.deps: >lua
+  MiniDeps.add("hmgle/nvim-radio")
+  require("radio").setup({ volume = 80 })
+<
+==============================================================================
+4. QUICK START                                          *radio-quick-start*
+
+>vim
+  :Radio              " open the station browser
+  :RadioSync          " fetch the Radio Browser catalog
+  :RadioPlay <UUID>   " play a saved station or any http(s) URL
+  :RadioStatus        " playback/recording HUD
+  :RadioDoctor        " diagnostics
+<
+
+==============================================================================
+5. CONFIGURATION                                      *radio-configuration*
+
+                                              *radio.setup()*
+Call once from your config: >lua
+  require("radio").setup({
+    mpv = "mpv",
+    ffmpeg = "ffmpeg",
+    ffprobe = "ffprobe",
+    volume = 80,
+    normalize_loudness = false,
+    audio_device = nil,
+    playback_timeout_secs = 12,
+    resume = false,               -- false | true | "selection"
+    api_url = nil,
+    connect_timeout_secs = 5,
+    request_timeout_secs = 20,
+    auto_sync_days = 7,           -- 0 disables background sync
+    recording_dir = nil,
+    probe_timeout_secs = 5,
+    recording_min_free_mb = 16,
+    language = nil,               -- "en" | "zh-CN"
+    single_instance = true,
+    debug = false,
+    data_dir = nil,               -- default $XDG_DATA_HOME/nvim-radio
+    keys = {},
+    ui = { width = 0.8, height = 0.8, border = "rounded", preview = true },
+  })
+<
+Keys are opt-in global mappings: toggle, pause, mute, volume_up,
+volume_down, record, status, random, stop. >lua
+  require("radio").setup({ keys = { toggle = "<leader>r" } })
+<
+Paths:~
+
+  data directory   $XDG_DATA_HOME/nvim-radio ($NVIM_RADIO_DATA_DIR overrides)
+  database         <data_dir>/radio.db
+  recordings       <data_dir>/recordings/
+  runtime          <data_dir>/run/
+
+==============================================================================
+6. COMMANDS                                                *radio-commands*
+
+                                                                *:Radio*
+:Radio                       Toggle the browser.
+:RadioPlay {UUID|URL}        Play a station or an HTTP(S) stream.
+:RadioStop                   Stop playback.
+:RadioPause                  Pause or resume.
+:RadioMute                   Mute or unmute.
+:RadioVolume {+n|-n|n}       Adjust or set the volume.
+:RadioRecord [DUR] [--output-dir DIR]
+                              Record the playing station.
+:RadioRecordStop             Stop and publish the recording.
+:RadioRandom [QUERY]         Random station, optional query.
+:RadioSync                   Sync the catalog.
+:RadioStatus                 Status HUD.
+:RadioDoctor                 Diagnostics.
+:RadioDevices                List mpv audio output devices.
+:RadioFavorites [add|remove UUID]
+                              Manage favorites.
+:RadioHistory                Recent successful plays.
+:RadioRecordings [list|play ID|remove ID [--index-only]]
+                              Manage recordings.
+:RadioStationAdd {NAME} {URL}
+                              Add a custom station.
+:RadioStationRemove {UUID}   Remove a custom station.
+:RadioOpenRecordings         Open the recordings directory.
+
+DUR accepts 30, 45s, 10m, 2h; range 1 second to 365 days.
+
+==============================================================================
+7. BROWSER KEYS                                          *radio-browser-keys*
+
+Enter, o, double-click   Play the selection.
+i, /                     Search the local catalog.
+F                        Country / language / tag / minimum-bitrate filters.
+s                        Cycle sort: clickcount, name, bitrate, votes, random.
+n                        Random station using the current filters.
+f                        Favorite / unfavorite.
+r                        Start / stop recording.
+R, F5                    Sync the catalog / refresh the list.
+[, ]                     Previous / next source: stations, favorites,
+                         history, custom, recordings.
+y, Y                     Yank the UUID / stream URL (or recording ID / path).
+d                        Delete a recording (with confirmation).
+O                        Open the recordings directory.
+q, Esc                   Close.
+
+==============================================================================
+8. RECORDING                                              *radio-recording*
+
+Recording is a stream copy; the codec is probed before recording starts.
+
+  MP3              .mp3
+  AAC (incl. HLS)  .aac
+  Vorbis           .ogg
+  Opus             .opus
+
+Each recording starts as a .part file, is verified with ffprobe after the
+stop, and is published without overwriting existing files. A JSON sidecar
+records station, track, timestamps, codec, duration, size, and reconnect
+count. Interrupted recordings keep their partial file, are marked
+"interrupted", and are recovered on the next start. Switching stations ends
+the current recording. Pausing playback does not pause recording.
+
+==============================================================================
+9. STATUSLINE                                            *radio-statusline*
+
+lualine: >lua
+  sections = { lualine_x = { function() return require("radio").statusline() end } }
+<
+Built-in: >lua
+  vim.o.statusline = "%f %m %= %{v:lua.require('radio').statusline()}"
+<
+==============================================================================
+10. API                                                        *radio-api*
+
+All functions are lazy; nothing starts until first use.
+
+radio.setup(opts)                 Configure the plugin.
+radio.engine()                    Create (or fetch) the engine.
+radio.toggle()                    Toggle the browser.
+radio.play(target)                Play a UUID or http(s) URL.
+radio.stop()                      Stop playback.
+radio.pause()                     Pause or resume.
+radio.mute()                      Mute or unmute.
+radio.volume(delta)               Adjust the volume.
+radio.record(duration, dir)       Record the playing station.
+radio.record_stop()               Stop and publish.
+radio.random(filter)              Random station.
+radio.sync(opts, cb)              Sync the catalog.
+radio.status()                    Open the status HUD.
+radio.statusline()                Statusline string.
+radio.stations(filter)            Returns stations, total.
+radio.favorites(filter)           Favorites list.
+radio.history()                   Recent plays.
+radio.recordings()                Recording records.
+radio.station_add(name, url, backups)
+radio.station_remove(uuid, opts)
+radio.recording_play(id)
+radio.recording_remove(id, index_only)
+radio.open_recordings()
+radio.devices()                   mpv audio devices.
+radio.doctor()                    Diagnostic lines.
+radio.info(uuid)                  Station by UUID.
+
+==============================================================================
+11. DEVELOPMENT                                        *radio-development*
+
+>sh
+  stylua --check lua plugin tests
+  nvim --headless -l tests/run.lua
+  NVIM_RADIO_TESTS=test_player nvim --headless -l tests/run.lua
+<
+Tests use an in-process HTTP server with real mpv/ffmpeg/ffprobe and a fake
+Radio Browser server.
+
+vim:tw=78:ts=8:ft=help:norl:
