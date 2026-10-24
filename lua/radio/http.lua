@@ -39,7 +39,7 @@ end
 ---@param args string[]
 ---@param on_done fun(code: integer, http_code: integer, err: string|nil)
 local function run_curl(args, on_done)
-  vim.system(args, {}, function(result)
+  return vim.system(args, {}, function(result)
     local code = result.code or 0
     local http_code = tonumber(util.system_output(result.stdout)) or 0
     local errtext = util.system_output(result.stderr)
@@ -92,12 +92,15 @@ end
 ---@param cb fun(err: string|nil, body: string|nil, status: integer|nil)
 function M.request(method, url, opts, cb)
   local outfile = tempname()
-  run_curl(
+  local request = {}
+  request.handle = run_curl(
     curl_args(method, url, vim.tbl_extend("force", opts or {}, { outfile = outfile })),
     function(code, http_code, curl_err)
       local function finish(err, body, status)
         vim.uv.fs_unlink(outfile, function() end)
-        cb(err, body, status)
+        if not request.cancelled then
+          cb(err, body, status)
+        end
       end
       if code == 63 then
         finish("directory_response_too_large", nil, nil)
@@ -120,20 +123,27 @@ function M.request(method, url, opts, cb)
       finish(nil, data, status)
     end
   )
+  function request:cancel()
+    if not self.cancelled then
+      self.cancelled = true
+      pcall(self.handle.kill, self.handle, "sigkill")
+    end
+  end
+  return request
 end
 
 ---@param url string
 ---@param opts table|nil
 ---@param cb fun(err: string|nil, body: string|nil, status: integer|nil)
 function M.get(url, opts, cb)
-  M.request("GET", url, opts, cb)
+  return M.request("GET", url, opts, cb)
 end
 
 ---@param url string
 ---@param opts table|nil
 ---@param cb fun(err: string|nil, body: string|nil, status: integer|nil)
 function M.post(url, opts, cb)
-  M.request("POST", url, opts, cb)
+  return M.request("POST", url, opts, cb)
 end
 
 ---Blocking GET, for tests and short diagnostics.

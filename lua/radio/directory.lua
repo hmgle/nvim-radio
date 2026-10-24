@@ -24,12 +24,40 @@ function Directory.new(opts)
     stop = opts.stop,
     servers = nil,
     discovered = false,
+    requests = {},
   }, Directory)
 end
 
 ---@return boolean
 function Directory:cancelled()
-  return self.stop ~= nil and self.stop() == true
+  return self.closed or (self.stop ~= nil and self.stop() == true)
+end
+
+-- Every network continuation passes this lifetime boundary before touching
+-- its captured store. Closing a directory suppresses callbacks and kills curl.
+function Directory:_request(method, url, opts, cb)
+  if self:cancelled() then
+    return
+  end
+  local request = {}
+  self.requests[request] = true
+  request.handle = http[method](url, opts, function(...)
+    self.requests[request] = nil
+    if not self:cancelled() then
+      cb(...)
+    end
+  end)
+  return request.handle
+end
+
+function Directory:close()
+  self.closed = true
+  for request in pairs(self.requests) do
+    if request.handle then
+      request.handle:cancel()
+    end
+  end
+  self.requests = {}
 end
 
 ---Shuffle a copy of `list` deterministically per call site (no RNG in tests
@@ -48,6 +76,10 @@ end
 ---Resolve the server list: configured URL, else the all.api mirror list.
 ---@param cb fun(err: string|nil, servers: string[]|nil)
 function Directory:discover(cb)
+  if self:cancelled() then
+    cb("cancelled", nil)
+    return
+  end
   if self.discovered and self.servers then
     cb(nil, self.servers)
     return
@@ -59,7 +91,7 @@ function Directory:discover(cb)
     cb(nil, self.servers)
     return
   end
-  http.get(ALL_SERVERS_URL, {
+  self:_request("get", ALL_SERVERS_URL, {
     connect_timeout = self.connect_timeout,
     timeout = self.request_timeout,
   }, function(err, body)
@@ -135,7 +167,8 @@ function Directory:bootstrap(store, cb)
       .. "/json/stations/search?limit="
       .. PAGE_SIZE
       .. "&hidebroken=true&order=clickcount&reverse=true"
-    http.get(
+    self:_request(
+      "get",
       url,
       { connect_timeout = self.connect_timeout, timeout = self.request_timeout },
       function(err, body)
@@ -239,7 +272,6 @@ function Directory:sync(store, opts, cb)
         if self:cancelled() then
           report.error = "cancelled"
           attempts[#attempts + 1] = report
-          store:set_meta("last_sync_attempt", vim.json.encode(report))
           cb("cancelled", nil)
           return
         end
@@ -256,7 +288,7 @@ function Directory:sync(store, opts, cb)
           .. "&offset="
           .. offset
           .. "&hidebroken=true&order=name"
-        http.get(url, {
+        self:_request("get", url, {
           connect_timeout = self.connect_timeout,
           timeout = self.request_timeout,
         }, function(err, body)
@@ -302,7 +334,6 @@ function Directory:sync(store, opts, cb)
           if self:cancelled() then
             report.error = "cancelled"
             attempts[#attempts + 1] = report
-            store:set_meta("last_sync_attempt", vim.json.encode(report))
             cb("cancelled", nil)
             return
           end
@@ -343,7 +374,7 @@ function Directory:refresh(uuid, cb)
       return
     end
     local url = servers[1] .. "/json/stations/byuuid/" .. uuid
-    http.get(url, {
+    self:_request("get", url, {
       connect_timeout = self.connect_timeout,
       timeout = math.min(self.request_timeout, 3),
     }, function(err, body)
@@ -378,7 +409,8 @@ function Directory:click(uuid)
     if not servers or not servers[1] then
       return
     end
-    http.post(
+    self:_request(
+      "post",
       servers[1] .. "/json/url/" .. uuid,
       { timeout = 3, connect_timeout = 3 },
       function() end

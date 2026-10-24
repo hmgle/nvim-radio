@@ -16,6 +16,7 @@ local suites = {
   "test_player",
   "test_recorder",
   "test_directory",
+  "test_async",
   "test_engine",
   "test_ui",
   "test_regressions",

@@ -567,7 +567,11 @@ function Engine:_fail_playback(reason)
     self.refresh_count = self.refresh_count + 1
     self:_say("refreshing station from directory")
     local uuid = station.stationuuid
+    local generation = self.generation
     self.directory:refresh(uuid, function(err, updated)
+      if self.stopping or generation ~= self.generation or not self.store then
+        return
+      end
       if not err and updated then
         self.store:upsert(updated)
         self:_play_source(
@@ -938,6 +942,12 @@ end
 ---@param opts table|nil {accept_shrink}
 ---@param cb function|nil
 function Engine:sync(opts, cb)
+  if self.stopping then
+    if cb then
+      cb("cancelled")
+    end
+    return
+  end
   if self.syncing then
     if cb then
       cb("sync already running")
@@ -953,6 +963,9 @@ function Engine:sync(opts, cb)
       self:_say("syncing catalog: " .. offset .. " stations")
     end,
   }, function(err, report)
+    if self.stopping then
+      return
+    end
     self.syncing = false
     if err then
       self:_say("sync failed: " .. err)
@@ -972,6 +985,8 @@ end
 
 function Engine:shutdown()
   self.stopping = true
+  self.directory:close()
+  self.syncing = false
   self:_stop_recording("shutdown")
   self:stop_playback()
   -- Finalization writes to the store asynchronously; give it a bounded window
