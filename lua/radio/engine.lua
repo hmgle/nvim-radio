@@ -49,38 +49,73 @@ local function pidfile_path()
   return o.runtime_dir .. "/nvim-radio.pid"
 end
 
----@return boolean ok, string|nil err
-local function acquire_lock()
-  local path = pidfile_path()
-  if not path then
-    return true
-  end
+---Read a small file through libuv (safe in fast-event contexts).
+---@param path string
+---@return string
+local function read_file(path)
   local fd = vim.uv.fs_open(path, "r", 420)
-  if fd then
-    local stat = vim.uv.fs_fstat(fd)
-    vim.uv.fs_close(fd)
-    if stat then
-      local data = vim.uv.fs_readfile(path) or ""
-      local pid = tonumber(util.trim(data))
-      if pid and pid > 0 and pid ~= vim.uv.os_getpid() then
-        local alive = pcall(vim.uv.kill, pid, 0)
-        if alive then
-          return false, "media_busy: another session (pid " .. pid .. ") owns this data directory"
-        end
-      end
-    end
+  if not fd then
+    return ""
   end
-  local fd = vim.uv.fs_open(path, "w", 420)
-  if fd then
-    vim.uv.fs_write(fd, tostring(vim.uv.os_getpid()))
-    vim.uv.fs_close(fd)
-  end
-  return true
+  local stat = vim.uv.fs_fstat(fd)
+  local data = (stat and stat.size > 0) and vim.uv.fs_read(fd, stat.size, 0) or ""
+  vim.uv.fs_close(fd)
+  return data or ""
 end
 
-local function release_lock()
+---@param pid integer
+---@return boolean alive and not ourselves
+local function process_alive(pid)
+  if pid <= 0 or pid == vim.uv.os_getpid() then
+    return false
+  end
+  -- uv.kill returns nil plus an error string (it does not raise), so the
+  -- return value — not the pcall — decides whether the process exists.
+  if not vim.uv.kill(pid, 0) then
+    return false
+  end
+  -- A zombie still answers signal 0 until it is reaped; treat it as dead so a
+  -- crashed session does not block the next one.
+  local stat = read_file("/proc/" .. pid .. "/stat")
+  local state = stat:match("%)%s+(%a)")
+  return state ~= "Z"
+end
+
+---Take ownership of the data directory, taking over stale locks.
+---@return boolean ok, string|nil err, boolean owned
+local function acquire_lock()
+  if not config.options.single_instance then
+    return true, nil, false
+  end
   local path = pidfile_path()
-  if path then
+  if not path then
+    return true, nil, false
+  end
+  local pid = tonumber(util.trim(read_file(path)))
+  if pid and process_alive(pid) then
+    return false, "media_busy: another session (pid " .. pid .. ") owns this data directory", false
+  end
+  local fd = vim.uv.fs_open(path, "w", 420)
+  if not fd then
+    return false, "cannot write the session lock: " .. path, false
+  end
+  vim.uv.fs_write(fd, tostring(vim.uv.os_getpid()))
+  vim.uv.fs_close(fd)
+  return true, nil, true
+end
+
+---Release the lock only while it still names this process.
+---@param owned boolean
+local function release_lock(owned)
+  if not owned then
+    return
+  end
+  local path = pidfile_path()
+  if not path then
+    return
+  end
+  local pid = tonumber(util.trim(read_file(path)))
+  if pid == vim.uv.os_getpid() then
     vim.uv.fs_unlink(path)
   end
 end
@@ -90,19 +125,18 @@ end
 function Engine.new(opts)
   opts = opts or {}
   local o = config.options
-  local ok, lock_err = acquire_lock()
-  if not ok and not opts.force then
+  local lock_ok, lock_err, lock_owned = acquire_lock()
+  if not lock_ok and not opts.force then
     return nil, lock_err
   end
   local store, store_err = store_mod.open(o.db_path)
   if not store then
     return nil, store_err
   end
-  if o.resume == "selection" then
-    local last = store:meta("pref_last_station")
-    if last then
-      store:set_meta("pref_source", "stations")
-    end
+  local resume_source = store:meta("pref_source")
+  local resume_station = nil
+  if o.resume == true or o.resume == "selection" then
+    resume_station = store:meta("pref_last_station")
   end
   local volume = tonumber(store:meta("pref_volume"))
   if volume and volume >= 0 and volume <= 100 then
@@ -111,6 +145,11 @@ function Engine.new(opts)
   local self
   self = setmetatable({
     store = store,
+    lock_owned = lock_owned,
+    resume_source = resume_source,
+    resume_station = resume_station,
+    refresh_count = 0,
+    finalizing = false,
     directory = directory.new({
       api_url = o.api_url,
       connect_timeout_secs = o.connect_timeout_secs,
@@ -155,6 +194,21 @@ function Engine.new(opts)
     ffprobe = o.ffprobe,
   })
   self.status.message = #warnings == 0 and "ready" or table.concat(warnings, "\n")
+
+  if o.resume == true and resume_station then
+    local station = self.store:station(resume_station)
+    if
+      station
+      and #model.Station.stream_candidates(station, self.store:backups(resume_station)) > 0
+    then
+      vim.schedule(function()
+        if self.stopping then
+          return
+        end
+        self:play_station(station)
+      end)
+    end
+  end
 
   if opts.auto_sync ~= false then
     self:_auto_sync()
@@ -229,10 +283,12 @@ end
 
 function Engine:active()
   return self.player ~= nil
+    or self.starting_player ~= nil
     or self.player_starting
     or self.reconnect_due ~= nil
     or self.recorder ~= nil
     or self.recording_probe ~= nil
+    or self.finalizing
     or self.syncing
 end
 
@@ -347,13 +403,22 @@ end
 ---@param station table
 ---@param candidates string[]
 ---@param kind string
-function Engine:_play_source(station, candidates, kind)
+---@param station table
+---@param candidates string[]
+---@param kind string
+---@param keep_recovery boolean|nil preserve the refresh budget and tried URLs
+function Engine:_play_source(station, candidates, kind, keep_recovery)
   self.generation = self.generation + 1
   self:_stop_recording(nil)
   self:_retire_player()
-  self.tried = {}
   self.candidates = vim.deepcopy(candidates)
-  self.refreshed = false
+  if not keep_recovery then
+    -- A new play request gets a fresh refresh budget; a directory refresh
+    -- continues the same request, so its budget and tried URLs survive.
+    self.tried = {}
+    self.refreshed = false
+    self.refresh_count = 0
+  end
   self.confirmed = false
   self.session_started = false
   self.source_kind = kind
@@ -392,7 +457,11 @@ function Engine:_start_url()
     or PlaybackState.Connecting
   self:_say("connecting: " .. (self.status.station and self.status.station.name or ""))
   self.player_starting = true
-  player_mod.start({
+  -- Callbacks that outlive their session generation are discarded: stopping or
+  -- switching stations must never let a stale player resurrect playback.
+  local generation = self.generation
+  local starting
+  starting = player_mod.start({
     mpv = o.mpv,
     volume = self.status.volume,
     playback_timeout_secs = o.playback_timeout_secs,
@@ -401,15 +470,29 @@ function Engine:_start_url()
     runtime_dir = o.runtime_dir,
     url = self.url,
   }, function(event)
+    if generation ~= self.generation then
+      return
+    end
     self:_on_player_event(event)
   end, function(err, player)
     self.player_starting = false
+    if self.starting_player == starting then
+      self.starting_player = nil
+    end
+    if generation ~= self.generation then
+      -- Superseded while connecting: drop the process immediately.
+      if player then
+        player:close()
+      end
+      return
+    end
     if err then
       self:_player_failed(err)
       return
     end
     self.player = player
   end)
+  self.starting_player = starting
 end
 
 ---@param event table
@@ -538,8 +621,15 @@ function Engine:_fail_playback(reason)
     self:_start_candidate()
     return
   end
-  if not self.refreshed and station and not station.custom and self.source_kind == "catalog" then
+  if
+    not self.refreshed
+    and self.refresh_count < 1
+    and station
+    and not station.custom
+    and self.source_kind == "catalog"
+  then
     self.refreshed = true
+    self.refresh_count = self.refresh_count + 1
     self:_say("refreshing station from directory")
     local uuid = station.stationuuid
     self.directory:refresh(uuid, function(err, updated)
@@ -548,7 +638,8 @@ function Engine:_fail_playback(reason)
         self:_play_source(
           updated,
           model.Station.stream_candidates(updated, self.store:backups(uuid)),
-          "catalog"
+          "catalog",
+          true
         )
       else
         self:_exhausted(reason)
@@ -637,10 +728,14 @@ function Engine:mute()
 end
 
 function Engine:stop_playback()
-  local closing = self.player
+  local closing = self.player or self.starting_player
   self.closing_player = true
   self:_retire_player()
   self.closing_player = nil
+  -- Cancel any pending reconnect so a stop during the backoff is final.
+  self.reconnect_due = nil
+  self.reconnect_attempts = 0
+  self.reconnect_window = {}
   self.status.muted = false
   self.status.playback_state = PlaybackState.Idle
   self.status.title = ""
@@ -652,10 +747,18 @@ end
 
 function Engine:_retire_player()
   local player = self.player
+  local starting = self.starting_player
   self.player = nil
+  self.starting_player = nil
   self.confirmed = false
+  -- Retiring a player invalidates every callback it owns, so a late event or
+  -- a late start confirmation cannot resurrect playback.
+  self.generation = self.generation + 1
   if player then
     player:close()
+  end
+  if starting then
+    starting:close()
   end
 end
 
@@ -850,8 +953,10 @@ function Engine:_stop_recording(reason)
     return
   end
   self.status.recording_state = RecordingState.Finalizing
+  self.finalizing = true
   self:_say("finalizing recording")
   recorder:finish(reason, function(record, err)
+    self.finalizing = false
     self.status.recording_ms = 0
     self.status.recording_path = record.path
     if err or record.status ~= "complete" then
@@ -916,12 +1021,23 @@ function Engine:sync(opts, cb)
   end)
 end
 
+---True while a recording still needs the database (probe, publish, save).
+function Engine:_finalizing()
+  return self.finalizing or self.recorder ~= nil or self.recording_probe ~= nil
+end
+
 function Engine:shutdown()
   self.stopping = true
   self:_stop_recording("shutdown")
   self:stop_playback()
+  -- Finalization writes to the store asynchronously; give it a bounded window
+  -- before the database and the session lock go away.
+  local deadline = vim.uv.now() + 6000
+  while self:_finalizing() and vim.uv.now() < deadline do
+    vim.wait(20)
+  end
   self:_stop_timer()
-  release_lock()
+  release_lock(self.lock_owned)
   if self.store then
     self.store:close()
     self.store = nil
