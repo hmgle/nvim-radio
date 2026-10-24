@@ -37,6 +37,10 @@ return function()
   end)
 
   H.eq(start_error, nil, "mpv starts")
+  H.check(
+    player.socket:match("/mpv%-" .. string.rep("%x", 12) .. "%.sock$") ~= nil,
+    "socket suffix has a fixed length"
+  )
   H.wait_for(8000, function()
     for _, event in ipairs(events) do
       if event.type == "playing" then
@@ -151,6 +155,15 @@ return function()
   end, "all close waiters run after exit")
   H.eq(cancel_callbacks, 1, "startup callback completes exactly once")
   H.eq(process_count(), baseline, "cancelled startup releases its process handle")
+  -- Caller PRNG seeds must not make persistent recording IDs repeat across
+  -- sessions, or make socket suffixes unexpectedly exceed path limits.
+  local util = require("radio.util")
+  math.randomseed(1234)
+  local id_a = util.uuid_v4()
+  math.randomseed(1234)
+  local id_b = util.uuid_v4()
+  H.check(util.is_uuid(id_a) and util.is_uuid(id_b), "OS-random IDs retain UUID syntax")
+  H.check(id_a ~= id_b, "re-seeding Lua cannot repeat persistent IDs")
   -- Missing binary surfaces a dependency error.
   local missing_error = "unset"
   player_mod.start({

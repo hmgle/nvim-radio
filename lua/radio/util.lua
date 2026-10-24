@@ -164,13 +164,17 @@ end
 
 ---@return string
 function M.uuid_v4()
-  local template = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
-  return (
-    template:gsub("[xy]", function(c)
-      local v = (c == "x") and math.random(0, 0xf) or math.random(8, 0xb)
-      return string.format("%x", v)
-    end)
-  )
+  local bytes = { assert(vim.uv.random(16)):byte(1, 16) }
+  bytes[7] = bit.bor(bit.band(bytes[7], 0x0f), 0x40)
+  bytes[9] = bit.bor(bit.band(bytes[9], 0x3f), 0x80)
+  local out = {}
+  for i, byte in ipairs(bytes) do
+    out[#out + 1] = string.format("%02x", byte)
+    if i == 4 or i == 6 or i == 8 or i == 10 then
+      out[#out + 1] = "-"
+    end
+  end
+  return table.concat(out)
 end
 
 ---radio-cli accepts only http(s) URLs with a host.

@@ -10,12 +10,10 @@ local SOCKET_PATH_LIMIT = 100
 
 ---@return string
 local function random_suffix(n)
-  local chars = "0123456789abcdef"
-  local out = {}
-  for i = 1, n do
-    out[i] = chars:sub(math.random(1, #chars), math.random(1, #chars))
-  end
-  return table.concat(out)
+  local bytes = assert(vim.uv.random(math.ceil(n / 2)))
+  return (bytes:gsub(".", function(c)
+    return string.format("%02x", c:byte())
+  end)):sub(1, n)
 end
 
 ---mpv command line, mirroring radio-cli's playback_command.
