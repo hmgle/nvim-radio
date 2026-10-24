@@ -29,12 +29,38 @@ local STATION_DEFAULTS = {
   favorite = false,
 }
 
+local STATION_FIELDS = {
+  "stationuuid",
+  "name",
+  "url",
+  "url_resolved",
+  "homepage",
+  "favicon",
+  "country",
+  "countrycode",
+  "state",
+  "language",
+  "languagecodes",
+  "tags",
+  "codec",
+  "bitrate",
+  "hls",
+  "lastcheckok",
+  "votes",
+  "clickcount",
+  "custom",
+  "active",
+  "favorite",
+}
+
 ---@param station table|nil
 ---@return table
 function M.station(station)
+  station = station or {}
   local out = vim.deepcopy(STATION_DEFAULTS)
-  for key, value in pairs(station or {}) do
-    if out[key] ~= nil then
+  for _, key in ipairs(STATION_FIELDS) do
+    local value = station[key]
+    if value ~= nil then
       out[key] = value
     end
   end
@@ -184,12 +210,36 @@ local RECORDING_DEFAULTS = {
   recovery_pending = false,
 }
 
+local RECORDING_FIELDS = {
+  "id",
+  "stationuuid",
+  "station_name",
+  "track",
+  "source_url_resolved",
+  "started_at",
+  "stopped_at",
+  "media_duration_ms",
+  "codec",
+  "container",
+  "path",
+  "final_path",
+  "size_bytes",
+  "status",
+  "error",
+  "reconnects",
+  "recovery_pending",
+}
+
 ---@param record table|nil
 ---@return table
 function M.recording(record)
   local out = vim.deepcopy(RECORDING_DEFAULTS)
-  for key, value in pairs(record or {}) do
-    if out[key] ~= nil then
+  record = record or {}
+  -- Whitelist: fields whose default is nil do not exist as table keys, so an
+  -- `out[key] ~= nil` check would silently drop track/final_path/error/...
+  for _, key in ipairs(RECORDING_FIELDS) do
+    local value = record[key]
+    if value ~= nil then
       out[key] = value
     end
   end

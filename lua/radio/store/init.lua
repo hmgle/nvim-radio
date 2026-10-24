@@ -268,17 +268,23 @@ function Store:migrate()
       end
     end
     if not found and has_column then
-      for _, sql in ipairs(V3_SCHEMA) do
-        local ok, exec_err = db:exec(sql)
-        if not ok then
-          error("migration 2->3: " .. tostring(exec_err), 0)
+      -- One transaction: a failed backfill must not leave a half-upgraded DB.
+      db:transaction(function()
+        for _, sql in ipairs(V3_SCHEMA) do
+          local ok, exec_err = db:exec(sql)
+          if not ok then
+            error("migration 2->3: " .. tostring(exec_err), 0)
+          end
         end
-      end
-      for _, row in ipairs(db:execute("SELECT uuid,json FROM stations")) do
-        local station = model.decode(row.json)
-        local normalized = station and util.normalize_url(station.primary_url()) or nil
-        db:execute("UPDATE stations SET normalized_url=?2 WHERE uuid=?1", { row.uuid, normalized })
-      end
+        for _, row in ipairs(db:execute("SELECT uuid,json FROM stations")) do
+          local station = model.decode(row.json)
+          local normalized = station and util.normalize_url(station:primary_url()) or nil
+          db:execute(
+            "UPDATE stations SET normalized_url=?2 WHERE uuid=?1",
+            { row.uuid, normalized }
+          )
+        end
+      end)
     end
     db:exec("PRAGMA user_version=3")
   end
