@@ -7,6 +7,11 @@ follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
 ### Fixed
 
+- Restore `false` as the disabled global keymap value, report zero-byte
+  recordings explicitly, and avoid adopting a mismatched final recording file
+  during recovery.
+- Use an `interrupted` recording state for interrupted writers and fall back
+  to unnormalized playback when the normalization capability probe times out.
 - Preserve optional recording fields (`track`, `final_path`, `stopped_at`,
   `media_duration_ms`, and `error`) in model and database round trips.
 - Upgrade schema v2 databases with populated stations; make the URL

@@ -37,7 +37,9 @@ directory (one media session at a time).
 - libsqlite3 shared library
 - curl
 
-Run |:RadioDoctor| to verify the host.
+Run |:RadioDoctor| to verify the host. If SQLite is outside the standard
+library paths (for example on NixOS), set `vim.g.sqlite_clib_path` or
+`SQLITE_CLIB_PATH` to its shared library path before loading the plugin.
 
 ==============================================================================
 3. INSTALLATION                                        *radio-installation*
@@ -64,6 +66,10 @@ mini.deps: >lua
   :RadioDoctor        " diagnostics
 <
 
+The browser opens with the current filters applied. Press `i` to search, `F`
+to filter, `Enter` to play, `r` to record, `q` to close. Random sorting keeps
+the same order for the current session so pages do not repeat stations.
+
 ==============================================================================
 5. CONFIGURATION                                      *radio-configuration*
 
@@ -85,7 +91,6 @@ Call once from your config: >lua
     recording_dir = nil,
     probe_timeout_secs = 5,
     recording_min_free_mb = 16,
-    language = nil,               -- "en" | "zh-CN"
     single_instance = true,
     debug = false,
     data_dir = nil,               -- default $XDG_DATA_HOME/nvim-radio
@@ -97,6 +102,10 @@ Keys are opt-in global mappings: toggle, pause, mute, volume_up,
 volume_down, record, status, random, stop. >lua
   require("radio").setup({ keys = { toggle = "<leader>r" } })
 <
+Set a mapping to `false` to disable it; omitting a mapping leaves it unbound.
+`ui.width` and `ui.height` are ratios from 0 (exclusive) to 1 (inclusive), not
+column or row counts.
+
 Paths:~
 
   data directory   $XDG_DATA_HOME/nvim-radio ($NVIM_RADIO_DATA_DIR overrides)
@@ -163,6 +172,10 @@ q, Esc                   Close.
 8. RECORDING                                              *radio-recording*
 
 Recording is a stream copy; the codec is probed before recording starts.
+
+Recording requires a catalog or custom station. To record a URL played directly
+with |:RadioPlay|, first save it with |:RadioStationAdd| and play that station.
+Local recording playback cannot be recorded.
 
   MP3              .mp3
   AAC (incl. HLS)  .aac

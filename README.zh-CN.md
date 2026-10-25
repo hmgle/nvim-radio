@@ -148,6 +148,8 @@ require("radio").setup({
 配置为 Lua 表而非 radio-cli 的 `config.toml`，键名与 radio-cli 的 TOML 设置
 一一对应。全局键位名：`toggle`、`pause`、`mute`、`volume_up`、
 `volume_down`、`record`、`status`、`random`、`stop`，默认均不绑定。
+键位设为 `false` 表示禁用；省略键名则不绑定。`ui.width` 和 `ui.height`
+是相对于 Neovim 窗口大小的比例（大于 0 且不超过 1），不是列数或行数。
 
 ### 路径
 

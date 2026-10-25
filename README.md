@@ -157,6 +157,9 @@ The configuration is a Lua table rather than radio-cli's `config.toml`; the
 keys match radio-cli's TOML settings one-for-one. Global keymap names are
 `toggle`, `pause`, `mute`, `volume_up`, `volume_down`, `record`, `status`,
 `random`, and `stop`; all default to unset.
+Set a mapping to `false` to disable it; omitting a mapping leaves it unbound.
+`ui.width` and `ui.height` are exclusive-0 to inclusive-1 ratios of the Neovim
+size, not column or row counts.
 
 ### Paths
 
