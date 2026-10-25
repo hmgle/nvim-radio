@@ -135,7 +135,10 @@ function M.setup(opts)
   check(type(o.keys) == "table", "keys (table)")
   if type(o.keys) == "table" then
     for key, lhs in pairs(o.keys) do
-      check(type(lhs) == "string" and lhs ~= "", "keys." .. key .. " (nonempty string)")
+      check(
+        lhs == false or (type(lhs) == "string" and lhs ~= ""),
+        "keys." .. key .. " (nonempty string or false)"
+      )
     end
   end
   check(type(o.ui) == "table", "ui (table)")
