@@ -659,7 +659,7 @@ function Store:_search_order(filter)
     return "json_extract(s.json,'$.votes') DESC,s.name,s.uuid"
   end
   if filter.sort == "random" then
-    return "((s.rowid * " .. self.random_seed .. ") % 2147483647),s.uuid"
+    return "((((s.rowid * " .. self.random_seed .. ") % 2147483647) * 48271) % 2147483647),s.uuid"
   end
   return "s.popularity DESC,s.name,s.uuid"
 end

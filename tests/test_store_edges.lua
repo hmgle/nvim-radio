@@ -26,6 +26,25 @@ return function()
   end
   H.eq(#order, 120, "random pages return every row")
   H.eq(vim.tbl_count(seen), 120, "random pages contain no duplicates")
+  local insertion_order = true
+  for i, uuid in ipairs(order) do
+    if uuid ~= rows[i].stationuuid then
+      insertion_order = false
+      break
+    end
+  end
+  H.eq(insertion_order, false, "random sort shuffles small catalogs too")
+  local other = assert(Store.open(path))
+  local other_order = other:search({ sort = "random", limit = 120 })
+  local different = false
+  for i, station in ipairs(other_order) do
+    if station.stationuuid ~= order[i] then
+      different = true
+      break
+    end
+  end
+  H.eq(different, true, "new store sessions get a fresh random order")
+  other:close()
   local page = store:search({ sort = "random", limit = 10, offset = 10 })
   H.eq(page[1].stationuuid, order[11], "revisiting random page preserves order")
   H.eq(
