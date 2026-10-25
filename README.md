@@ -29,7 +29,9 @@ independent recording process. No account or API key is required.
 | `libsqlite3` | Shared library for the FFI binding |
 | `curl` | Radio Browser API access |
 
-Run `:RadioDoctor` to verify the host.
+Run `:RadioDoctor` to verify the host. If SQLite is outside the standard
+library paths (for example on NixOS), set `vim.g.sqlite_clib_path` or
+`SQLITE_CLIB_PATH` to its shared library path before loading the plugin.
 
 ## Installation
 

@@ -25,7 +25,8 @@ Neovim Lua 插件作为控制器，`mpv` 作为独立播放进程，`ffmpeg` 作
 | `libsqlite3` | FFI 绑定所需的共享库 |
 | `curl` | 访问 Radio Browser API |
 
-执行 `:RadioDoctor` 可检查宿主环境。
+执行 `:RadioDoctor` 可检查宿主环境。如果 SQLite 不在标准库路径中（例如 NixOS），
+请在加载插件前通过 `vim.g.sqlite_clib_path` 或 `SQLITE_CLIB_PATH` 指定共享库路径。
 
 ## 安装
 

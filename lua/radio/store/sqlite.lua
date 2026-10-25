@@ -71,7 +71,12 @@ local CANDIDATES = {
 ---Load libsqlite3; returns the library namespace or nil plus an error.
 function M.load()
   local errors = {}
-  for _, name in ipairs(CANDIDATES) do
+  local candidates = vim.deepcopy(CANDIDATES)
+  local override = vim.g.sqlite_clib_path or vim.env.SQLITE_CLIB_PATH
+  if type(override) == "string" and override ~= "" then
+    table.insert(candidates, 1, override)
+  end
+  for _, name in ipairs(candidates) do
     local ok, lib = pcall(ffi.load, name)
     if ok and lib then
       return lib
