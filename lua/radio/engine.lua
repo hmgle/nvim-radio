@@ -35,6 +35,7 @@ local RecordingState = {
   Recording = "recording",
   Finalizing = "finalizing",
   Done = "done",
+  Interrupted = "interrupted",
   Failed = "failed",
 }
 
@@ -945,7 +946,10 @@ function Engine:_stop_recording(reason)
     end
     self.status.recording_ms = 0
     self.status.recording_path = record.path
-    if err or record.status ~= "complete" then
+    if record.status == "interrupted" then
+      self.status.recording_state = RecordingState.Interrupted
+      self:_say("recording " .. record.status .. ": " .. tostring(record.error or err))
+    elseif err or record.status ~= "complete" then
       self.status.recording_state = RecordingState.Failed
       self:_say("recording " .. record.status .. ": " .. tostring(record.error or err))
     else
