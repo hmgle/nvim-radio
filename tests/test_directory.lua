@@ -168,6 +168,11 @@ return function()
   H.check(true, "click reported without error")
 
   -- sync_due reflects the last sync timestamp.
+  store:set_meta("last_sync", os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - 7 * 86400 + 60))
+  H.eq(Directory.sync_due(store, 7), false, "UTC timestamp just before sync deadline")
+  store:set_meta("last_sync", os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - 7 * 86400 - 60))
+  H.eq(Directory.sync_due(store, 7), true, "UTC timestamp just after sync deadline")
+  store:set_meta("last_sync", os.date("!%Y-%m-%dT%H:%M:%SZ"))
   H.eq(Directory.sync_due(store, 0), false, "auto sync disabled")
   H.eq(Directory.sync_due(store, 7), false, "fresh sync is not due")
   store:set_meta("last_sync", "2020-01-01T00:00:00Z")

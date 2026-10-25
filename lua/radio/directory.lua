@@ -434,14 +434,19 @@ function Directory.sync_due(store, days)
   if not year then
     return true
   end
-  local stamp = os.time({
-    year = tonumber(year),
-    month = tonumber(month),
-    day = tonumber(day),
-    hour = tonumber(hour) or 0,
-    min = tonumber(min) or 0,
-    sec = tonumber(sec) or 0,
-  })
+  -- Convert the UTC civil date directly to epoch days. os.time(table)
+  -- interprets fields in the local timezone and can also apply DST.
+  year, month, day = tonumber(year), tonumber(month), tonumber(day)
+  year = year - (month <= 2 and 1 or 0)
+  local era = math.floor(year / 400)
+  local yoe = year - era * 400
+  local shifted_month = month + (month > 2 and -3 or 9)
+  local doy = math.floor((153 * shifted_month + 2) / 5) + day - 1
+  local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+  local stamp = (era * 146097 + doe - 719468) * 86400
+    + tonumber(hour) * 3600
+    + tonumber(min) * 60
+    + tonumber(sec)
   local age_days = (os.time() - stamp) / 86400
   return age_days >= days
 end
