@@ -21,6 +21,7 @@ local suites = {
   "test_engine",
   "test_playback_edges",
   "test_ui",
+  "test_browser_edges",
   "test_regressions",
   "test_commands",
 }

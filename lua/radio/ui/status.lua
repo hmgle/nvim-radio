@@ -43,6 +43,9 @@ function Status.hud(engine)
   if not engine then
     return
   end
+  if Status.win and vim.api.nvim_win_is_valid(Status.win) then
+    vim.api.nvim_win_close(Status.win, true)
+  end
   local status = engine.status
   local lines = {
     "station:  " .. (status.station and status.station.name or "-"),
@@ -57,8 +60,8 @@ function Status.hud(engine)
     "",
     "message:  " .. status.message,
   }
-  local width = math.min(72, math.max(40, math.floor(vim.o.columns * 0.5)))
-  local height = #lines
+  local width = math.max(1, math.min(vim.o.columns - 2, 72, math.floor(vim.o.columns * 0.5)))
+  local height = math.max(1, math.min(#lines, vim.o.lines - 3))
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -73,6 +76,16 @@ function Status.hud(engine)
     title = " nvim-radio status ",
     title_pos = "center",
     zindex = 50,
+  })
+  Status.win = win
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(win),
+    once = true,
+    callback = function()
+      if Status.win == win then
+        Status.win = nil
+      end
+    end,
   })
   vim.keymap.set("n", "q", function()
     vim.api.nvim_win_close(win, true)

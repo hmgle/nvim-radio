@@ -17,8 +17,8 @@ local function create_float(width, height, opts)
   local bufnr = vim.api.nvim_create_buf(false, true)
   local win = vim.api.nvim_open_win(bufnr, true, {
     relative = "editor",
-    row = math.max(1, math.floor((vim.o.lines - height) / 2) - 1),
-    col = math.max(1, math.floor((vim.o.columns - width) / 2) - 1),
+    row = opts.row or 0,
+    col = opts.col or 0,
     width = width,
     height = height,
     style = "minimal",
@@ -48,10 +48,39 @@ function Browser.new(engine)
     filter = model.filter({}),
     items = {},
     total = 0,
-    width = math.max(40, math.floor(vim.o.columns * ui.width)),
-    height = math.max(10, math.floor(vim.o.lines * ui.height)),
+
     preview = ui.preview,
   }, Browser)
+end
+
+---Keep both panes inside the editor, stacking details on narrow screens.
+function Browser:_resize()
+  local ui = config.options.ui
+  local width = math.max(1, math.min(vim.o.columns - 2, math.floor(vim.o.columns * ui.width)))
+  local height = math.max(1, math.min(vim.o.lines - 3, math.floor(vim.o.lines * ui.height)))
+  local row = math.max(0, math.floor((vim.o.lines - height - 2) / 2))
+  local col = math.max(0, math.floor((vim.o.columns - width - 2) / 2))
+  self.width, self.height = width, height
+  self.preview_geometry = nil
+  if self.preview and width >= 90 then
+    local details = math.min(60, math.floor(width * 0.4))
+    self.width = width - details - 2
+    self.preview_geometry =
+      { row = row, col = col + self.width + 2, width = details, height = height }
+  elseif self.preview and height >= 10 and width >= 12 then
+    local details = math.max(3, math.floor(height * 0.45))
+    self.height = height - details - 2
+    self.preview_geometry =
+      { row = row + self.height + 2, col = col, width = width, height = details }
+  end
+  self.row, self.col = row, col
+  if self.win and vim.api.nvim_win_is_valid(self.win) then
+    vim.api.nvim_win_set_config(
+      self.win,
+      { relative = "editor", row = row, col = col, width = self.width, height = self.height }
+    )
+    self:_render_preview()
+  end
 end
 
 function Browser:open()
@@ -60,9 +89,12 @@ function Browser:open()
     self:refresh()
     return
   end
+  self:_resize()
   self.buf, self.win = create_float(self.width, self.height, {
     border = config.options.ui.border,
     title = config.options.ui.title,
+    row = self.row,
+    col = self.col,
   })
   vim.api.nvim_win_set_buf(self.win, self.buf)
   self:_set_keymaps()
@@ -71,12 +103,21 @@ function Browser:open()
     once = true,
     callback = function()
       self:_unsubscribe()
+      if self.resize_autocmd then
+        vim.api.nvim_del_autocmd(self.resize_autocmd)
+        self.resize_autocmd = nil
+      end
       self.win = nil
       self.buf = nil
       if self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
         vim.api.nvim_win_close(self.preview_win, true)
         self.preview_win = nil
       end
+    end,
+  })
+  self.resize_autocmd = vim.api.nvim_create_autocmd("VimResized", {
+    callback = function()
+      self:_resize()
     end,
   })
   vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
@@ -141,7 +182,12 @@ end
 
 function Browser:_set_keymaps()
   local map = function(lhs, rhs, desc)
-    vim.keymap.set("n", lhs, rhs, { buffer = self.buf, nowait = true, desc = desc })
+    vim.keymap.set("n", lhs, function()
+      local ok, err = pcall(rhs)
+      if not ok then
+        log.error(tostring(err))
+      end
+    end, { buffer = self.buf, nowait = true, desc = desc })
   end
   map("<CR>", function()
     self:play_current()
@@ -237,6 +283,9 @@ function Browser:refresh()
     self:close()
     return
   end
+  local selected = self:current_item()
+  local selected_id = selected
+    and (selected.kind == "station" and selected.station.stationuuid or selected.record.id)
   local filter = self.filter
   if self.source == "recordings" then
     self.items = {}
@@ -269,7 +318,12 @@ function Browser:refresh()
     end
     self.total = total
   end
-  self:render()
+  local last = math.floor(math.max(0, self.total - 1) / filter.limit) * filter.limit
+  if filter.offset > last then
+    filter.offset = last
+    return self:refresh()
+  end
+  self:render(selected_id)
 end
 
 ---@return string
@@ -343,17 +397,28 @@ function Browser:_lines()
   return lines
 end
 
-function Browser:render()
+function Browser:render(selected_id)
   if not self.buf or not vim.api.nvim_buf_is_valid(self.buf) then
     return
+  end
+  local row = vim.api.nvim_win_is_valid(self.win) and vim.api.nvim_win_get_cursor(self.win)[1] or 2
+  if selected_id then
+    for i, item in ipairs(self.items) do
+      if (item.kind == "station" and item.station.stationuuid or item.record.id) == selected_id then
+        row = i + 1
+        break
+      end
+    end
   end
   local lines = self:_lines()
   vim.bo[self.buf].modifiable = true
   vim.api.nvim_buf_set_lines(self.buf, 0, -1, false, lines)
   vim.bo[self.buf].modifiable = false
-  vim.api.nvim_buf_set_var(self.buf, "radio_items", self.items)
   if vim.api.nvim_win_is_valid(self.win) then
-    vim.api.nvim_win_set_cursor(self.win, { math.min(2, #lines), 0 })
+    vim.api.nvim_win_set_cursor(
+      self.win,
+      { math.max(math.min(2, #lines), math.min(row, #lines)), 0 }
+    )
   end
   self:_render_preview()
 end
@@ -531,18 +596,20 @@ end
 ---@param apply fun(value: string|nil)
 function Browser:_facet_filter(kind, apply)
   local facets = self.engine.store:facets(kind, "", 200)
-  local options = { "* (any)" }
+  local options, values = { "* (any)" }, {}
   for _, facet in ipairs(facets) do
-    options[#options + 1] = facet.value .. "  (" .. facet.count .. ")"
+    local label = facet.value .. "  (" .. facet.count .. ")"
+    options[#options + 1] = label
+    values[label] = facet.value
   end
   vim.ui.select(options, { prompt = "Value" }, function(choice)
     if not choice then
       return
     end
-    if choice:sub(1, 1) == "*" then
+    if choice == options[1] then
       apply(nil)
     else
-      apply(choice:match("^(%S+)"))
+      apply(values[choice])
     end
     self.filter.offset = 0
     self:refresh()
@@ -578,9 +645,7 @@ function Browser:delete_recording()
 end
 
 function Browser:open_recordings()
-  local dir = config.options.recording_dir
-  vim.system({ "xdg-open", dir }, {}, function() end)
-  vim.notify("[radio] opening " .. dir)
+  return require("radio").open_recordings()
 end
 
 ---Render the details pane for the current selection.
@@ -639,27 +704,35 @@ function Browser:_render_preview()
     end
     return
   end
-  local width = math.max(30, math.min(60, math.floor(vim.o.columns * 0.3)))
-  local height = math.max(6, math.floor(self.height * 0.6))
-  if self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
-    vim.api.nvim_buf_set_lines(self.preview_buf, 0, -1, false, lines)
+  local geometry = self.preview_geometry
+  if not geometry then
+    if self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
+      vim.api.nvim_win_close(self.preview_win, true)
+      self.preview_win = nil
+    end
     return
   end
-  local row = math.max(1, math.floor((vim.o.lines - height) / 2) - 1)
-  local col = math.max(1, math.floor((vim.o.columns - self.width) / 2) - 1) + self.width + 1
+  if self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
+    vim.api.nvim_buf_set_lines(self.preview_buf, 0, -1, false, lines)
+    vim.api.nvim_win_set_config(
+      self.preview_win,
+      vim.tbl_extend("force", geometry, { relative = "editor" })
+    )
+    return
+  end
   self.preview_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(self.preview_buf, 0, -1, false, lines)
   self.preview_win = vim.api.nvim_open_win(self.preview_buf, false, {
     relative = "editor",
-    row = row,
-    col = col,
-    width = width,
-    height = height,
+    row = geometry.row,
+    col = geometry.col,
+    width = geometry.width,
+    height = geometry.height,
     style = "minimal",
     border = config.options.ui.border,
     title = " details ",
     title_pos = "center",
-    zindex = 45,
+    zindex = 51,
   })
   vim.bo[self.preview_buf].bufhidden = "wipe"
   vim.bo[self.preview_buf].filetype = "nvim-radio"
