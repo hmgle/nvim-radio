@@ -16,6 +16,7 @@ local suites = {
   "test_store",
   "test_store_edges",
   "test_player",
+  "test_probes",
   "test_recorder",
   "test_http",
   "test_directory",

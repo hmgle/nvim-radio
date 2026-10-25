@@ -9,34 +9,53 @@ local Doctor = {}
 ---@param program string
 ---@param version_args string[]
 ---@return table
-local function check_program(program, version_args)
+local function check_program(program, version_args, cb)
   local path = vim.fn.exepath(program)
   if path == "" then
-    return { ok = false, name = program, detail = "not found in PATH" }
-  end
-  local result = vim.system({ path, unpack(version_args) }, {}):wait(5000)
-  local first = ""
-  for line in util.system_output(result.stdout):gmatch("[^\n]+") do
-    first = line
-    break
-  end
-  if first == "" then
-    for line in util.system_output(result.stderr):gmatch("[^\n]+") do
-      first = line
-      break
+    local result = { ok = false, name = program, detail = "not found in PATH" }
+    if cb then
+      vim.schedule(function()
+        cb(result)
+      end)
+    else
+      return result
     end
+    return
   end
-  return { ok = result.code == 0, name = program, detail = (first ~= "" and first or path) }
+  local function report(result)
+    local output = util.system_output(result.stdout)
+    if output == "" then
+      output = util.system_output(result.stderr)
+    end
+    local first = output:match("[^\n]+") or path
+    return { ok = result.code == 0, name = program, detail = first }
+  end
+  local args = { path, unpack(version_args) }
+  if cb then
+    local ok, err = pcall(
+      vim.system,
+      args,
+      { timeout = 5000 },
+      vim.schedule_wrap(function(result)
+        cb(report(result))
+      end)
+    )
+    if not ok then
+      vim.schedule(function()
+        cb({ ok = false, name = program, detail = tostring(err) })
+      end)
+    end
+    return
+  end
+  local ok, result = pcall(function()
+    return vim.system(args, {}):wait(5000)
+  end)
+  return report(ok and result or { code = -1, stderr = tostring(result) })
 end
 
 ---@return table[]
-function Doctor.run()
+local function collect(checks)
   local o = config.ensure()
-  local checks = {}
-
-  checks[#checks + 1] = check_program(o.mpv, { "--version" })
-  checks[#checks + 1] = check_program(o.ffmpeg, { "-version" })
-  checks[#checks + 1] = check_program(o.ffprobe, { "-version" })
   checks[#checks + 1] = {
     ok = sqlite.available(),
     name = "libsqlite3",
@@ -105,14 +124,46 @@ function Doctor.run()
   return checks
 end
 
----@return string[]
-function Doctor.lines()
+---With a callback, external checks run concurrently without blocking Neovim.
+function Doctor.run(cb)
+  local o = config.ensure()
+  local programs =
+    { { o.mpv, { "--version" } }, { o.ffmpeg, { "-version" } }, { o.ffprobe, { "-version" } } }
+  local checks = {}
+  if not cb then
+    for i, program in ipairs(programs) do
+      checks[i] = check_program(program[1], program[2])
+    end
+    return collect(checks)
+  end
+  local remaining = #programs
+  for i, program in ipairs(programs) do
+    check_program(program[1], program[2], function(check)
+      checks[i] = check
+      remaining = remaining - 1
+      if remaining == 0 then
+        cb(collect(checks))
+      end
+    end)
+  end
+end
+
+local function format_lines(checks)
   local lines = {}
-  for _, check in ipairs(Doctor.run()) do
+  for _, check in ipairs(checks) do
     lines[#lines + 1] =
       string.format("%s %-24s %s", check.ok and "✓" or "✗", check.name, check.detail)
   end
   return lines
+end
+
+function Doctor.lines(cb)
+  if cb then
+    return Doctor.run(function(checks)
+      cb(format_lines(checks))
+    end)
+  end
+  return format_lines(Doctor.run())
 end
 
 ---@return boolean all_ok

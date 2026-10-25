@@ -7,6 +7,19 @@ local Player = {}
 Player.__index = Player
 
 local SOCKET_PATH_LIMIT = 100
+local normalization_cache = {}
+
+local function normalization_supported(result)
+  if result.code ~= 0 then
+    return false
+  end
+  for line in util.system_output(result.stdout):gmatch("[^\n]+") do
+    if line:match("^%s*dynaudnorm") then
+      return true
+    end
+  end
+  return false
+end
 
 ---@return string
 local function random_suffix(n)
@@ -80,14 +93,10 @@ end
 ---@param on_event fun(event: table)
 ---@param cb fun(err: string|nil, player: table|nil)
 ---@return table|nil player
-function Player.start(opts, on_event, cb)
+local function start_player(opts, on_event, cb)
   local socket, socket_err = socket_path(opts.runtime_dir)
   if not socket then
     cb(socket_err, nil)
-    return nil
-  end
-  if opts.normalize_loudness and not Player.supports_normalization(opts.mpv) then
-    cb("normalization_unavailable", nil)
     return nil
   end
   local args = playback_args(opts, socket)
@@ -159,6 +168,81 @@ function Player.start(opts, on_event, cb)
   end
   try_connect()
   return self
+end
+
+---Own the optional capability probe until it exits, including cancellation.
+function Player.start(opts, on_event, cb)
+  if not opts.normalize_loudness or normalization_cache[opts.mpv] == true then
+    return start_player(opts, on_event, cb)
+  end
+  if normalization_cache[opts.mpv] == false then
+    cb("normalization_unavailable", nil)
+    return nil
+  end
+  local task = { callbacks = {} }
+  local function closed()
+    if task.closed then
+      return
+    end
+    task.closed = true
+    for _, done in ipairs(task.callbacks) do
+      done()
+    end
+    task.callbacks = {}
+  end
+  function task:close(done)
+    if done then
+      if self.closed then
+        done()
+      else
+        self.callbacks[#self.callbacks + 1] = done
+      end
+    end
+    if self.closing then
+      return
+    end
+    self.closing = true
+    if self.player then
+      self.player:close(closed)
+    elseif self.probe and not self.probe_done then
+      pcall(self.probe.kill, self.probe, 9)
+    elseif self.probe_done then
+      closed()
+    end
+  end
+  local function result_ready(result)
+    task.probe_done = true
+    if task.closing then
+      cb("cancelled", nil)
+      closed()
+      return
+    end
+    local supported = normalization_supported(result)
+    normalization_cache[opts.mpv] = supported
+    if not supported then
+      cb("normalization_unavailable", nil)
+      return
+    end
+    task.player = start_player(opts, on_event, cb)
+  end
+  local ok, probe = pcall(
+    vim.system,
+    { opts.mpv, "--no-config", "--af=help" },
+    { timeout = 3000 },
+    vim.schedule_wrap(result_ready)
+  )
+  if ok then
+    task.probe = probe
+  else
+    vim.schedule(function()
+      task.probe_done = true
+      cb(task.closing and "cancelled" or "missing_dependency: mpv", nil)
+      if task.closing then
+        closed()
+      end
+    end)
+  end
+  return task
 end
 
 function Player:_complete_start(err)
@@ -391,44 +475,54 @@ end
 ---List mpv audio output devices.
 ---@param mpv string
 ---@return table[] devices, string|nil err
-function Player.audio_devices(mpv)
-  local result = vim.system({ mpv, "--no-config", "--audio-device=help" }, {}):wait()
-  if result.code ~= 0 then
-    return {}, "audio_devices_unavailable"
-  end
-  local output = util.system_output(result.stdout)
-  local devices = {}
-  for line in output:gmatch("[^\n]+") do
-    local name, description = line:match("^%s*'([^']*)' %((.*)%)%s*$")
-    if name and name ~= "" then
-      devices[#devices + 1] = { name = name, description = description or "" }
+function Player.audio_devices(mpv, cb)
+  local function parse(result)
+    local devices = {}
+    if result.code == 0 then
+      for line in util.system_output(result.stdout):gmatch("[^\n]+") do
+        local name, description = line:match("^%s*'([^']*)' %((.*)%)%s*$")
+        if name and name ~= "" then
+          devices[#devices + 1] = { name = name, description = description or "" }
+        end
+      end
     end
+    return devices, #devices == 0 and "audio_devices_unavailable" or nil
   end
-  if #devices == 0 then
-    return {}, "audio_devices_unavailable"
+  local args = { mpv, "--no-config", "--audio-device=help" }
+  if cb then
+    local ok, handle = pcall(
+      vim.system,
+      args,
+      { timeout = 3000 },
+      vim.schedule_wrap(function(result)
+        cb(parse(result))
+      end)
+    )
+    if not ok then
+      vim.schedule(function()
+        cb({}, "missing_dependency: mpv")
+      end)
+    end
+    return ok and handle or nil
   end
-  return devices
+  local ok, result = pcall(function()
+    return vim.system(args, {}):wait(3000)
+  end)
+  if not ok then
+    return {}, "missing_dependency: mpv"
+  end
+  return parse(result)
 end
 
-local normalization_cache = {}
-
----Probe whether this mpv build provides dynaudnorm.
----@param mpv string
----@return boolean
+---Synchronous capability query for explicit API callers; playback probes asynchronously.
 function Player.supports_normalization(mpv)
   if normalization_cache[mpv] ~= nil then
     return normalization_cache[mpv]
   end
-  local supported = false
-  local result = vim.system({ mpv, "--no-config", "--af=help" }, {}):wait()
-  if result.code == 0 then
-    for line in util.system_output(result.stdout):gmatch("[^\n]+") do
-      if line:match("^%s*dynaudnorm") then
-        supported = true
-        break
-      end
-    end
-  end
+  local ok, result = pcall(function()
+    return vim.system({ mpv, "--no-config", "--af=help" }, {}):wait(3000)
+  end)
+  local supported = ok and normalization_supported(result) or false
   normalization_cache[mpv] = supported
   return supported
 end

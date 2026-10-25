@@ -109,16 +109,23 @@ command("RadioStatus", function()
 end, { desc = "Show the playback/recording HUD" })
 
 command("RadioDoctor", function()
-  vim.notify("[radio] doctor\n" .. table.concat(require("radio").doctor(), "\n"))
+  require("radio").doctor(function(lines)
+    vim.notify("[radio] doctor\n" .. table.concat(lines, "\n"))
+  end)
 end, { desc = "Run diagnostics" })
 
 command("RadioDevices", function()
-  local devices = require("radio").devices()
-  local lines = {}
-  for _, device in ipairs(devices) do
-    lines[#lines + 1] = device.name .. "  " .. device.description
-  end
-  vim.notify("[radio] audio devices\n" .. table.concat(lines, "\n"))
+  require("radio").devices(function(devices, err)
+    if err then
+      require("radio.log").error(err)
+      return
+    end
+    local lines = {}
+    for _, device in ipairs(devices) do
+      lines[#lines + 1] = device.name .. "  " .. device.description
+    end
+    vim.notify("[radio] audio devices\n" .. table.concat(lines, "\n"))
+  end)
 end, { desc = "List mpv audio output devices" })
 
 command("RadioFavorites", function(info)

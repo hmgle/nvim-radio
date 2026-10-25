@@ -232,14 +232,14 @@ function M.open_recordings()
 end
 
 ---@return table[] devices
-function M.devices()
+function M.devices(cb)
   local o = require("radio.config").ensure()
-  return require("radio.player").audio_devices(o.mpv)
+  return require("radio.player").audio_devices(o.mpv, cb)
 end
 
 ---@return string[] lines
-function M.doctor()
-  return require("radio.doctor").lines()
+function M.doctor(cb)
+  return require("radio.doctor").lines(cb)
 end
 
 ---@param uuid string
