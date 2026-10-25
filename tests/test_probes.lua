@@ -63,29 +63,22 @@ return function()
 
   -- Ownership transfers from the capability probe to the connecting player.
   local wrapper = dir .. "/wrapped-mpv"
-  vim.fn.writefile(
-    {
-      "#!/bin/sh",
-      'if [ "$2" = "--af=help" ]; then',
-      "  echo ' dynaudnorm'",
-      "  exit 0",
-      "fi",
-      "exec " .. vim.fn.shellescape(vim.fn.exepath("mpv")) .. ' "$@"',
-    },
-    wrapper
-  )
+  vim.fn.writefile({
+    "#!/bin/sh",
+    'if [ "$2" = "--af=help" ]; then',
+    "  echo ' dynaudnorm'",
+    "  exit 0",
+    "fi",
+    "exec " .. vim.fn.shellescape(vim.fn.exepath("mpv")) .. ' "$@"',
+  }, wrapper)
   vim.uv.fs_chmod(wrapper, 448)
-  local connecting = Player.start(
-    {
-      mpv = wrapper,
-      normalize_loudness = true,
-      runtime_dir = config.options.runtime_dir,
-      audio_device = "null",
-      url = H.make_mp3(dir, 2),
-    },
-    function() end,
-    function() end
-  )
+  local connecting = Player.start({
+    mpv = wrapper,
+    normalize_loudness = true,
+    runtime_dir = config.options.runtime_dir,
+    audio_device = "null",
+    url = H.make_mp3(dir, 2),
+  }, function() end, function() end)
   H.wait_for(3000, function()
     return connecting.player ~= nil
   end, "probe starts a connecting player")
