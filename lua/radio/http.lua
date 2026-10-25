@@ -7,33 +7,38 @@ local version = require("radio.version").version
 M.USER_AGENT = "nvim-radio/" .. version
 M.MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
-local temp_counter = 0
-
----Temp file name without the Vimscript API (fast-event safe).
----@return string
+---Reserve an unpredictable, private file before handing its path to curl.
 local function tempname()
-  temp_counter = temp_counter + 1
-  return vim.uv.os_tmpdir()
-    .. "/nvim-radio-http-"
-    .. tostring(vim.uv.os_getpid())
-    .. "-"
-    .. temp_counter
-    .. "-"
-    .. string.format("%06d", math.random(1, 999999))
+  local path = vim.uv.os_tmpdir() .. "/nvim-radio-http-" .. util.uuid_v4()
+  local fd, err = vim.uv.fs_open(path, "wx", 384)
+  if not fd then
+    return nil, tostring(err)
+  end
+  vim.uv.fs_close(fd)
+  return path
 end
 
----Read a whole file through libuv (safe in fast-event contexts).
----@param path string
----@return string|nil
+---Read through EOF, including filesystems that return short reads.
 local function read_file(path)
   local fd = vim.uv.fs_open(path, "r", 438)
   if not fd then
     return nil
   end
-  local stat = vim.uv.fs_fstat(fd)
-  local data = stat and stat.size > 0 and vim.uv.fs_read(fd, stat.size, 0) or ""
+  local chunks, offset = {}, 0
+  while true do
+    local chunk = vim.uv.fs_read(fd, 65536, offset)
+    if not chunk then
+      vim.uv.fs_close(fd)
+      return nil
+    end
+    if #chunk == 0 then
+      break
+    end
+    chunks[#chunks + 1] = chunk
+    offset = offset + #chunk
+  end
   vim.uv.fs_close(fd)
-  return data
+  return table.concat(chunks)
 end
 
 ---@param args string[]
@@ -91,14 +96,25 @@ end
 ---@param opts table|nil
 ---@param cb fun(err: string|nil, body: string|nil, status: integer|nil)
 function M.request(method, url, opts, cb)
-  local outfile = tempname()
+  local outfile, temp_err = tempname()
   local request = {}
   local function finish(err, body, status)
     request.done = true
-    vim.uv.fs_unlink(outfile, function() end)
+    if outfile then
+      vim.uv.fs_unlink(outfile, function() end)
+    end
     if not request.cancelled then
       cb(err, body, status)
     end
+  end
+  if not outfile then
+    function request:cancel()
+      self.cancelled = true
+    end
+    vim.schedule(function()
+      finish("directory_request: cannot create response file: " .. temp_err)
+    end)
+    return request
   end
   local ok, handle = pcall(
     run_curl,
@@ -163,19 +179,24 @@ end
 ---@param opts table|nil
 ---@return string|nil body, string|nil err
 function M.get_sync(url, opts)
-  local outfile = tempname()
-  local args = curl_args("GET", url, vim.tbl_extend("force", opts or {}, { outfile = outfile }))
-  local result = vim.system(args, {}):wait()
-  vim.uv.fs_unlink(outfile, function() end)
-  local code = result.code or 0
-  if code ~= 0 then
-    return nil,
-      (
-        util.system_output(result.stderr) ~= "" and util.system_output(result.stderr)
-        or ("curl exit " .. code)
-      )
+  local outfile, temp_err = tempname()
+  if not outfile then
+    return nil, temp_err
   end
-  local body = read_file(outfile)
+  local args = curl_args("GET", url, vim.tbl_extend("force", opts or {}, { outfile = outfile }))
+  local ok, result = pcall(function()
+    return vim.system(args, {}):wait()
+  end)
+  local body = ok and result.code == 0 and read_file(outfile) or nil
+  vim.uv.fs_unlink(outfile)
+  if not ok then
+    return nil, tostring(result)
+  end
+  if result.code ~= 0 then
+    return nil,
+      util.system_output(result.stderr) ~= "" and util.system_output(result.stderr)
+        or ("curl exit " .. tostring(result.code))
+  end
   if not body then
     return nil, "cannot read response"
   end

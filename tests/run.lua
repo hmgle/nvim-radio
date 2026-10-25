@@ -17,6 +17,7 @@ local suites = {
   "test_store_edges",
   "test_player",
   "test_recorder",
+  "test_http",
   "test_directory",
   "test_async",
   "test_lifecycle",
