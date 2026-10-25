@@ -204,7 +204,12 @@ return function()
   end, "externally killed recording settles")
   H.check(killed.record.status ~= "complete", "external SIGKILL is not success")
 
-  -- A failed database write must reap the spawned process and remove its part.
+  -- A failed database write must not launch a child or leave its part.
+  local spawn, spawned = vim.uv.spawn, false
+  vim.uv.spawn = function(...)
+    spawned = true
+    return spawn(...)
+  end
   local save = store.save_recording
   store.save_recording = function()
     error("disk full")
@@ -219,6 +224,8 @@ return function()
     { streams = { { codec_name = "mp3" } } }
   )
   store.save_recording = save
+  vim.uv.spawn = spawn
+  H.eq(spawned, false, "database failure never starts ffmpeg")
   H.check(failed == nil and save_err:find("disk full", 1, true), "start reports database failure")
   H.wait_for(3000, function()
     local count = 0
@@ -228,7 +235,7 @@ return function()
       end
     end
     return count == 2 -- Both deliberately killed recordings retain their parts.
-  end, "failed start removes its orphan partial after child exit")
+  end, "failed start removes its partial immediately")
 
   -- Crash recovery: a stale recording row is finalized as interrupted.
   store:save_recording(model.recording({
@@ -281,19 +288,34 @@ return function()
   H.eq(vim.uv.fs_stat(same).size, same_size, "same-path publication keeps the audio")
   H.check(vim.uv.fs_stat(same .. ".json") ~= nil, "same-path publication keeps its sidecar")
 
-  store:save_recording(
-    model.recording({
-      id = "unrecoverable",
-      path = recordings .. "/gone.part",
-      final_path = recordings .. "/gone.mp3",
-      status = "finalizing",
-      size_bytes = 100,
-    })
-  )
+  store:save_recording(model.recording({
+    id = "unrecoverable",
+    path = recordings .. "/gone.part",
+    final_path = recordings .. "/gone.mp3",
+    status = "finalizing",
+    size_bytes = 100,
+  }))
   H.eq(#Recorder.recover(store, opts), 1, "failed finalization warns once")
   H.eq(store:recording("unrecoverable").status, "failed", "failed recovery reaches terminal status")
   H.eq(#store:unfinished_recordings(), 0, "failed recovery no longer blocks deletion")
   H.eq(#Recorder.recover(store, opts), 0, "next startup does not repeat permanent failure")
+  local moved_part = recordings .. "/mismatch.mp3.part"
+  local moved_final = recordings .. "/mismatch.mp3"
+  vim.fn.writefile({ "audio" }, moved_part)
+  store:save_recording(model.recording({
+    id = "moved-mismatch",
+    path = moved_part,
+    final_path = moved_final,
+    status = "finalizing",
+    size_bytes = 999,
+  }))
+  H.eq(#Recorder.recover(store, opts), 1, "size mismatch after rename reports recovery failure")
+  H.eq(
+    store:recording("moved-mismatch").path,
+    moved_final,
+    "failed recovery retains the actual audio path"
+  )
+  H.check(vim.uv.fs_stat(moved_final) ~= nil, "failed recovery preserves renamed audio")
   store:close()
   stop()
 end

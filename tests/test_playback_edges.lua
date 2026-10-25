@@ -73,6 +73,23 @@ return function()
   )
   H.eq(engine.random_filter, nil, "empty random clears retry mode")
 
+  local Recorder = require("radio.recorder")
+  local probe, record_start = Recorder.probe, Recorder.start
+  Recorder.probe = function(_, _, _, cb)
+    cb(nil, { streams = { { codec_name = "mp3" } } })
+    return { cancel = function() end }
+  end
+  Recorder.start = function()
+    error("injected recording setup failure")
+  end
+  engine:standalone_record(station.stationuuid, nil, nil)
+  H.eq(engine.recording_probe, nil, "recording setup error clears pending probe")
+  H.eq(engine.status.recording_state, "failed", "recording setup error reaches failed state")
+  H.check(
+    engine.status.message:find("injected recording setup failure", 1, true),
+    "recording setup error is surfaced"
+  )
+  Recorder.probe, Recorder.start = probe, record_start
   engine:shutdown()
   player.start = original
 end

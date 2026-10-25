@@ -410,6 +410,15 @@ function Recorder.start(opts, store, station, url, dir, duration, info, track)
     }),
   }, Recorder)
 
+  -- Persist ownership before launching a writer. A database failure must
+  -- leave neither a child process nor an unindexed partial file behind.
+  local saved, save_err = pcall(store.save_recording, store, self.record)
+  if not saved then
+    vim.uv.fs_close(fd)
+    vim.uv.fs_unlink(partial)
+    return nil, "recording_store: " .. tostring(save_err)
+  end
+
   local stderr_pipe = vim.uv.new_pipe()
   local handle, spawn_err = vim.uv.spawn(args[1], {
     args = vim.list_slice(args, 2),
@@ -420,6 +429,7 @@ function Recorder.start(opts, store, station, url, dir, duration, info, track)
   vim.uv.fs_close(fd)
   if not handle then
     stderr_pipe:close()
+    pcall(store.remove_recording_index, store, self.record.id)
     vim.uv.fs_unlink(partial)
     return nil,
       "missing_dependency: ffmpeg" .. (spawn_err and (" (" .. tostring(spawn_err) .. ")") or "")
@@ -434,15 +444,6 @@ function Recorder.start(opts, store, station, url, dir, duration, info, track)
     self:_consume_stderr(chunk)
   end)
 
-  local saved, save_err = pcall(store.save_recording, store, self.record)
-  if not saved then
-    -- Keep ownership until the exit callback reaps the child. Only then is
-    -- it safe to remove a partial file that ffmpeg may still be writing.
-    self._discard_on_exit = true
-    self:_close_stderr()
-    pcall(vim.uv.process_kill, handle, "sigkill")
-    return nil, "recording_store: " .. tostring(save_err)
-  end
   write_sidecar(self.record)
   if duration then
     self.deadline = vim.uv.now() + (duration + (opts.playback_timeout_secs or 12)) * 1000
@@ -508,9 +509,6 @@ function Recorder:_on_exit(code, signal)
   self.exit_signal = signal
   if self.handle and not self.handle:is_closing() then
     self.handle:close()
-  end
-  if self._discard_on_exit then
-    vim.uv.fs_unlink(self.partial)
   end
   if self._cancelled then
     self:_settle(self.record.error)
@@ -613,7 +611,8 @@ function Recorder:finish(reason, cb)
       reason = reason or "直播源提前结束"
     end
     local signal = self.exit_signal or 0
-    local graceful = signal == 0 and (self.exit_code == 0 or self.stop_requested)
+    local graceful = signal == 0
+        and (self.exit_code == 0 or (self.stop_requested and self.exit_code == 255))
       or (self.stop_requested and signal == 2)
     if signal ~= 0 and not graceful then
       reason = reason or ("FFmpeg terminated by signal " .. signal)
@@ -771,6 +770,13 @@ function Recorder.recover(store, opts)
       end
     end)
     if not ok then
+      if
+        not vim.uv.fs_stat(record.path)
+        and record.final_path
+        and vim.uv.fs_stat(record.final_path)
+      then
+        record.path = record.final_path
+      end
       local message = "恢复失败: 录音 "
         .. record.id
         .. " ("
