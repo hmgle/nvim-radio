@@ -21,6 +21,16 @@ local function normalization_supported(result)
   return false
 end
 
+local function normalization_probe_error(result)
+  if result.code == 124 then
+    return "normalization_probe_timeout"
+  end
+  if normalization_supported(result) then
+    return nil
+  end
+  return "normalization_unavailable"
+end
+
 ---@return string
 local function random_suffix(n)
   local bytes = assert(vim.uv.random(math.ceil(n / 2)))
@@ -217,10 +227,16 @@ function Player.start(opts, on_event, cb)
       closed()
       return
     end
-    local supported = normalization_supported(result)
-    normalization_cache[opts.mpv] = supported
-    if not supported then
-      cb("normalization_unavailable", nil)
+    local probe_error = normalization_probe_error(result)
+    if probe_error == "normalization_probe_timeout" then
+      log.warn("loudness normalization disabled: capability probe timed out")
+      local fallback_opts = vim.tbl_deep_extend("force", opts, { normalize_loudness = false })
+      task.player = start_player(fallback_opts, on_event, cb)
+      return
+    end
+    normalization_cache[opts.mpv] = probe_error == nil
+    if probe_error then
+      cb(probe_error, nil)
       return
     end
     task.player = start_player(opts, on_event, cb)

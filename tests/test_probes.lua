@@ -31,6 +31,45 @@ return function()
   H.eq(probe_error, "cancelled", "cancelled normalization cannot launch playback")
   H.eq(task.player, nil, "cancelled normalization creates no player")
 
+  -- Fake mpv: the capability probe runs {mpv, "--no-config", "--af=help"}, so
+  -- $2 is the probe marker and every other invocation execs the real binary.
+  -- Keep the argument order in sync with Player.start.
+  local fallback = dir .. "/timeout-mpv"
+  vim.fn.writefile({
+    "#!/bin/sh",
+    'if [ "$2" = "--af=help" ]; then',
+    "  exec sleep 30",
+    "fi",
+    "exec " .. vim.fn.shellescape(vim.fn.exepath("mpv")) .. ' "$@"',
+  }, fallback)
+  vim.uv.fs_chmod(fallback, 448)
+  local fallback_error, fallback_started
+  local timeout_task = Player.start({
+    mpv = fallback,
+    normalize_loudness = true,
+    runtime_dir = config.options.runtime_dir,
+    audio_device = "null",
+    url = H.make_mp3(dir, 2),
+  }, function() end, function(err)
+    if not fallback_started then
+      fallback_error = err
+      fallback_started = true
+    end
+  end)
+  -- The probe itself burns the hard 3 s timeout, so the budget must also cover
+  -- spawning and connecting the fallback player.
+  H.wait_for(8000, function()
+    return fallback_started and timeout_task.player ~= nil
+  end, "normalization timeout falls back to playback")
+  local fallback_reaped = false
+  timeout_task:close(function()
+    fallback_reaped = true
+  end)
+  H.wait_for(3000, function()
+    return fallback_reaped
+  end, "fallback player is closed after the test")
+  H.eq(fallback_error, nil, "normalization timeout is not a hard failure")
+
   local missing
   local missing_task = Player.start(
     { mpv = dir .. "/missing", normalize_loudness = true, runtime_dir = config.options.runtime_dir },
