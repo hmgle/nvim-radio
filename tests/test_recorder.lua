@@ -132,6 +132,35 @@ return function()
   H.eq(stored.status, "complete", "database updated to complete")
   H.eq(#store:unfinished_recordings(), 0, "no unfinished recordings")
 
+  local empty_ffmpeg = dir .. "/empty-ffmpeg"
+  vim.fn.writefile({ "#!/bin/sh", "exit 0" }, empty_ffmpeg)
+  vim.uv.fs_chmod(empty_ffmpeg, 448)
+  local empty = assert(
+    Recorder.start(
+      vim.tbl_extend("force", opts, { ffmpeg = empty_ffmpeg }),
+      store,
+      station,
+      url .. "/fixture.mp3",
+      recordings,
+      nil,
+      { streams = { { codec_name = "mp3" } } }
+    )
+  )
+  local empty_done = false
+  H.wait_for(3000, function()
+    return empty.ended
+  end, "empty recording writer exits")
+  empty:finish(nil, function()
+    empty_done = true
+  end)
+  H.wait_for(5000, function()
+    return empty_done
+  end, "empty recording settles")
+  H.eq(empty.record.status, "failed", "empty recording fails")
+  H.eq(empty.record.error, "empty_recording", "empty recording has a specific error")
+  vim.uv.fs_unlink(empty.record.path)
+  vim.uv.fs_unlink(empty.record.path .. ".json")
+
   H.eq(recorder.handle:is_closing(), true, "ffmpeg process handle released")
   H.eq(recorder._stderr_pipe:is_closing(), true, "ffmpeg stderr pipe released")
 
@@ -310,12 +339,30 @@ return function()
     size_bytes = 999,
   }))
   H.eq(#Recorder.recover(store, opts), 1, "size mismatch after rename reports recovery failure")
-  H.eq(
-    store:recording("moved-mismatch").path,
-    moved_final,
-    "failed recovery retains the actual audio path"
-  )
+  H.eq(store:recording("moved-mismatch").path, moved_part, "unverified final path is not adopted")
   H.check(vim.uv.fs_stat(moved_final) ~= nil, "failed recovery preserves renamed audio")
+
+  local matching_final = recordings .. "/matching.mp3"
+  vim.fn.writefile({ "audio" }, matching_final)
+  local matching_size = vim.uv.fs_stat(matching_final).size
+  store:save_recording(model.recording({
+    id = "matching-final",
+    path = recordings .. "/matching.mp3.part",
+    final_path = matching_final,
+    status = "finalizing",
+    size_bytes = matching_size,
+  }))
+  local save_recording = store.save_recording
+  store.save_recording = function()
+    error("index unavailable")
+  end
+  local matching_warnings = Recorder.recover(store, opts)
+  store.save_recording = save_recording
+  H.eq(#matching_warnings, 1, "verified recovery failure warns once")
+  H.check(
+    matching_warnings[1]:find(matching_final, 1, true) ~= nil,
+    "matching final path is adopted"
+  )
   store:close()
   stop()
 end

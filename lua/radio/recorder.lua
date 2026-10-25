@@ -680,7 +680,13 @@ function Recorder:finish(reason, cb)
 
     self.record.error = self.record.error
       or reason
-      or (self.errors ~= "" and self.errors or ("FFmpeg exit " .. tostring(self.exit_code)))
+      or (
+        self.errors ~= "" and self.errors
+        or (
+          self.record.size_bytes == 0 and "empty_recording"
+          or ("FFmpeg exit " .. tostring(self.exit_code))
+        )
+      )
     if self.errors ~= "" and not self.record.error:find(self.errors, 1, true) then
       self.record.error = self.record.error .. "\n" .. util.trim(self.errors)
     end
@@ -770,12 +776,11 @@ function Recorder.recover(store, opts)
       end
     end)
     if not ok then
-      if
-        not vim.uv.fs_stat(record.path)
-        and record.final_path
-        and vim.uv.fs_stat(record.final_path)
-      then
-        record.path = record.final_path
+      if not vim.uv.fs_stat(record.path) and record.final_path then
+        local final_stat = vim.uv.fs_stat(record.final_path)
+        if final_stat and final_stat.size == record.size_bytes and final_stat.size > 0 then
+          record.path = record.final_path
+        end
       end
       local message = "recovery failed: recording "
         .. record.id
