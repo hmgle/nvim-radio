@@ -22,7 +22,6 @@ M.defaults = {
   probe_timeout_secs = 5,
   recording_min_free_mb = 16,
   -- Interface.
-  language = nil, -- "en" | "zh-CN" (default: from environment)
   debug = false,
   single_instance = true,
   data_dir = nil, -- default: $XDG_DATA_HOME/nvim-radio
@@ -120,10 +119,6 @@ function M.setup(opts)
     o.audio_device == nil or (type(o.audio_device) == "string" and not o.audio_device:find("[%c]")),
     "audio_device (no control characters)"
   )
-  check(
-    o.language == nil or o.language == "en" or o.language == "zh-CN",
-    'language ("en" | "zh-CN")'
-  )
   check(type(o.auto_sync_days) == "number" and o.auto_sync_days >= 0, "auto_sync_days (>=0)")
   for _, key in ipairs({ "api_url", "data_dir", "recording_dir" }) do
     check(
@@ -206,25 +201,6 @@ function M.ensure()
     M.setup(nil)
   end
   return M.options
-end
-
----Default language from the environment (radio-cli precedence, config only).
----@return string
-function M.detect_language()
-  local lang = M.options.language
-  if lang then
-    return lang
-  end
-  for _, key in ipairs({ "NVIM_RADIO_LANG", "LC_ALL", "LANG" }) do
-    local value = vim.env[key]
-    if value and value ~= "" then
-      if value:lower():find("zh", 1, true) then
-        return "zh-CN"
-      end
-      return "en"
-    end
-  end
-  return "en"
 end
 
 return M

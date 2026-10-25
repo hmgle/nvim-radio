@@ -66,7 +66,8 @@ require("radio").setup({ volume = 80 })
 ```
 
 浏览器按当前过滤条件打开：`i` 搜索，`F` 过滤，`Enter` 播放，`r` 录音，`q`
-关闭。结果分页浏览（`L` / `H`），顶栏实时显示播放与录音状态。`:RadioSync` 按每页 1000 个电台分页拉取并原子发布；目录缩水超过 25%
+关闭。结果分页浏览（`L` / `H`），顶栏实时显示播放与录音状态。随机排序在当前会话中
+保持顺序稳定，避免翻页时重复显示电台。`:RadioSync` 按每页 1000 个电台分页拉取并原子发布；目录缩水超过 25%
 时需要确认才会接受。
 
 ## 浏览器键位
@@ -133,7 +134,6 @@ require("radio").setup({
   recording_dir = nil,          -- 默认 <数据目录>/recordings
   probe_timeout_secs = 5,
   recording_min_free_mb = 16,
-  language = nil,               -- "en" | "zh-CN"（默认取环境变量）
   single_instance = true,       -- 数据目录 flock 锁
   debug = false,
   data_dir = nil,               -- 默认 $XDG_DATA_HOME/nvim-radio
@@ -180,6 +180,10 @@ vim.o.statusline = "%f %m %= %{v:lua.require('radio').statusline()}"
 ## 录音
 
 录音采用流拷贝，不重新编码。开始录制前会探测编码并选择容器。
+
+录音要求当前播放的是目录电台或自定义电台。通过 `:RadioPlay` 直接播放的临时 URL，
+需要先用 `:RadioStationAdd` 保存并播放该电台后才能录音。本地录音播放不能再次录制。
+插件界面提示统一使用英文。
 
 | 流编码 | 输出 |
 | --- | --- |

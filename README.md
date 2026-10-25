@@ -72,7 +72,8 @@ require("radio").setup({ volume = 80 })
 
 The browser opens with the current filters applied. Press `i` to search, `F`
 to filter, `Enter` to play, `r` to record, `q` to close. Results are paged
-(`L` / `H`), and the header tracks playback and recording live. `:RadioSync`
+(`L` / `H`), and the header tracks playback and recording live. Random sorting
+keeps the same order for the current session so pages do not repeat stations. `:RadioSync`
 downloads the catalog in pages of 1000 stations and publishes it atomically;
 a shrink larger than 25 % is rejected unless confirmed.
 
@@ -140,7 +141,6 @@ require("radio").setup({
   recording_dir = nil,          -- default <data_dir>/recordings
   probe_timeout_secs = 5,
   recording_min_free_mb = 16,
-  language = nil,               -- "en" | "zh-CN" (default: environment)
   single_instance = true,       -- OS file lock, shared with radio-cli
   debug = false,
   data_dir = nil,               -- default $XDG_DATA_HOME/nvim-radio
@@ -190,6 +190,10 @@ vim.o.statusline = "%f %m %= %{v:lua.require('radio').statusline()}"
 
 Recording is a stream copy: audio is not re-encoded. The codec is probed
 before recording starts and selects the container.
+
+Recording requires a catalog or custom station. To record a URL played directly
+with `:RadioPlay`, first save it with `:RadioStationAdd` and play that station.
+Local recording playback cannot be recorded. Interface messages use English.
 
 | Stream codec | Output |
 | --- | --- |

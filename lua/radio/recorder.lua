@@ -606,9 +606,9 @@ function Recorder:finish(reason, cb)
       and target ~= nil
       and measured + 100 < target
     if self.timed_out then
-      reason = reason or "录音未在时限内完成"
+      reason = reason or "recording deadline exceeded"
     elseif premature then
-      reason = reason or "直播源提前结束"
+      reason = reason or "stream ended before requested duration"
     end
     local signal = self.exit_signal or 0
     local graceful = signal == 0
@@ -631,7 +631,7 @@ function Recorder:finish(reason, cb)
         and verification.streams[1].codec_name
       if probed ~= self.record.codec then
         self.record.status = "failed"
-        self.record.error = "录音文件未通过音频轨道验证；保留临时文件"
+        self.record.error = "recording audio verification failed; partial file retained"
       end
     end
     if not self.record.media_duration_ms and self.duration_ms > 0 then
@@ -645,11 +645,11 @@ function Recorder:finish(reason, cb)
       local published, publish_err = publish(self.partial, self.final_path)
       if not published then
         self.record.recovery_pending = true
-        self.record.error = "录音 "
+        self.record.error = "recording "
           .. self.record.id
           .. " ("
           .. self.record.path
-          .. ") 收尾待重试: "
+          .. ") finalization pending: "
           .. tostring(publish_err)
         self.store:save_recording(self.record)
         write_sidecar(self.record)
@@ -751,7 +751,7 @@ function Recorder.recover(store, opts)
       if record.status == "recording" then
         record.status = "interrupted"
         record.stopped_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
-        record.error = "上一个会话未正常结束；保留临时文件供恢复"
+        record.error = "previous session ended unexpectedly; partial file retained for recovery"
         local stat = vim.uv.fs_stat(record.path)
         record.size_bytes = stat and stat.size or 0
         record.recovery_pending = true
@@ -760,8 +760,8 @@ function Recorder.recover(store, opts)
       local retry = record.recovery_pending
       if retry then
         record.error = vim.uv.fs_stat(record.path)
-            and "上一个会话未正常结束；临时文件保留，元数据已恢复"
-          or "上一个会话未正常结束；音频文件缺失，元数据已恢复"
+            and "previous session ended unexpectedly; partial file retained, metadata recovered"
+          or "previous session ended unexpectedly; audio file missing, metadata recovered"
       end
       record.recovery_pending = false
       write_sidecar(record)
@@ -777,11 +777,11 @@ function Recorder.recover(store, opts)
       then
         record.path = record.final_path
       end
-      local message = "恢复失败: 录音 "
+      local message = "recovery failed: recording "
         .. record.id
         .. " ("
         .. record.path
-        .. ")："
+        .. "): "
         .. tostring(err)
       record.error = message
       -- Publication failures retain the audio, but must not keep a dead
@@ -790,7 +790,7 @@ function Recorder.recover(store, opts)
       record.recovery_pending = false
       local saved, save_err = pcall(store.save_recording, store, record)
       if not saved then
-        warnings[#warnings + 1] = message .. "；数据库: " .. tostring(save_err)
+        warnings[#warnings + 1] = message .. "; database: " .. tostring(save_err)
       else
         warnings[#warnings + 1] = message
       end
