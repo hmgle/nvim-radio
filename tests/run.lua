@@ -11,6 +11,7 @@ local H = require("tests.helpers")
 H.setup_runtime()
 
 local suites = {
+  "test_config",
   "test_lock",
   "test_store",
   "test_player",

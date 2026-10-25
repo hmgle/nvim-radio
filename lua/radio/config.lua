@@ -70,8 +70,10 @@ end
 ---Merge user options into defaults, validate, and create directories.
 ---@param opts table|nil
 function M.setup(opts)
-  M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
-  local o = M.options
+  if opts ~= nil and type(opts) ~= "table" then
+    error("nvim-radio: invalid settings: options (table)", 0)
+  end
+  local o = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
   local invalid = {}
   local function check(cond, key)
     if not cond then
@@ -115,7 +117,7 @@ function M.setup(opts)
     'resume (false | true | "selection")'
   )
   check(
-    o.audio_device == nil or not o.audio_device:find("[%c]"),
+    o.audio_device == nil or (type(o.audio_device) == "string" and not o.audio_device:find("[%c]")),
     "audio_device (no control characters)"
   )
   check(
@@ -123,6 +125,55 @@ function M.setup(opts)
     'language ("en" | "zh-CN")'
   )
   check(type(o.auto_sync_days) == "number" and o.auto_sync_days >= 0, "auto_sync_days (>=0)")
+  for _, key in ipairs({ "api_url", "data_dir", "recording_dir" }) do
+    check(
+      o[key] == nil or (type(o[key]) == "string" and o[key] ~= "" and not o[key]:find("[%c]")),
+      key
+    )
+  end
+  if type(o.api_url) == "string" then
+    check(require("radio.util").validate_url(o.api_url), "api_url (http(s) URL)")
+  end
+  for _, key in ipairs({ "normalize_loudness", "debug", "single_instance" }) do
+    check(type(o[key]) == "boolean", key .. " (boolean)")
+  end
+  check(type(o.keys) == "table", "keys (table)")
+  if type(o.keys) == "table" then
+    for key, lhs in pairs(o.keys) do
+      check(type(lhs) == "string" and lhs ~= "", "keys." .. key .. " (nonempty string)")
+    end
+  end
+  check(type(o.ui) == "table", "ui (table)")
+  if type(o.ui) == "table" then
+    for _, key in ipairs({ "width", "height" }) do
+      check(
+        type(o.ui[key]) == "number" and o.ui[key] > 0 and o.ui[key] <= 1,
+        "ui." .. key .. " (0-1)"
+      )
+    end
+    check(type(o.ui.preview) == "boolean", "ui.preview (boolean)")
+    check(type(o.ui.title) == "string", "ui.title (string)")
+    local border = o.ui.border
+    local valid_border = type(border) == "string"
+      and vim.tbl_contains({ "none", "single", "double", "rounded", "solid", "shadow" }, border)
+    if type(border) == "table" then
+      valid_border = vim.tbl_contains({ 0, 1, 2, 4, 8 }, #border)
+      for _, entry in ipairs(border) do
+        valid_border = valid_border
+          and (type(entry) == "string" or (type(entry) == "table" and type(entry[1]) == "string"))
+      end
+    end
+    check(valid_border, "ui.border")
+  end
+  -- Reject NaN and infinities before downstream arithmetic or subprocess flags.
+  for key, value in pairs(o) do
+    if type(value) == "number" then
+      check(
+        value == value and value ~= math.huge and value ~= -math.huge,
+        key .. " (finite number)"
+      )
+    end
+  end
   if #invalid > 0 then
     error("nvim-radio: invalid settings: " .. table.concat(invalid, ", "), 0)
   end
@@ -132,6 +183,7 @@ function M.setup(opts)
   o.db_path = o.data_dir .. "/radio.db"
   o.recording_dir = o.recording_dir and vim.fs.normalize(o.recording_dir)
     or (o.data_dir .. "/recordings")
+  M.options = o
   M.prepare()
   return M.options
 end
