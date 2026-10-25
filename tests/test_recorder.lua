@@ -171,8 +171,64 @@ return function()
   local elapsed = (vim.uv.hrtime() - began) / 1e6
   H.check(elapsed >= 2800 and elapsed < 4500, "SIGKILL deadline is three seconds, not six")
   H.eq(hard.exit_signal, 9, "stubborn ffmpeg was killed")
+  H.check(hard.record.status ~= "complete", "forced stop never publishes a truncated recording")
+  H.check(hard.record.error:find("signal 9", 1, true) ~= nil, "signal failure is visible")
+  H.check(vim.uv.fs_stat(hard.partial) ~= nil, "killed recording retains partial audio")
+  H.eq(vim.uv.fs_stat(hard.final_path), nil, "killed recording is not published")
   H.eq(hard.handle:is_closing(), true, "killed ffmpeg process handle released")
   H.eq(hard._stderr_pipe:is_closing(), true, "killed ffmpeg stderr pipe released")
+
+  -- An external SIGKILL is also a failure when libuv reports exit code zero.
+  local killed = assert(
+    Recorder.start(
+      opts,
+      store,
+      station,
+      url .. "/fixture.mp3",
+      recordings,
+      nil,
+      { streams = { { codec_name = "mp3" } } }
+    )
+  )
+  assert(vim.uv.process_kill(killed.handle, "sigkill"))
+  H.wait_for(3000, function()
+    return killed.ended
+  end, "externally killed child reaped")
+  H.eq(killed.exit_code, 0, "libuv reports zero code for signal termination")
+  local killed_done = false
+  killed:finish(nil, function()
+    killed_done = true
+  end)
+  H.wait_for(5000, function()
+    return killed_done
+  end, "externally killed recording settles")
+  H.check(killed.record.status ~= "complete", "external SIGKILL is not success")
+
+  -- A failed database write must reap the spawned process and remove its part.
+  local save = store.save_recording
+  store.save_recording = function()
+    error("disk full")
+  end
+  local failed, save_err = Recorder.start(
+    opts,
+    store,
+    station,
+    url .. "/fixture.mp3",
+    recordings,
+    nil,
+    { streams = { { codec_name = "mp3" } } }
+  )
+  store.save_recording = save
+  H.check(failed == nil and save_err:find("disk full", 1, true), "start reports database failure")
+  H.wait_for(3000, function()
+    local count = 0
+    for name in vim.fs.dir(recordings) do
+      if name:match("%.part$") then
+        count = count + 1
+      end
+    end
+    return count == 2 -- Both deliberately killed recordings retain their parts.
+  end, "failed start removes its orphan partial after child exit")
 
   -- Crash recovery: a stale recording row is finalized as interrupted.
   store:save_recording(model.recording({
@@ -209,5 +265,35 @@ return function()
   end)
   H.check(not ok, "publishing onto an existing file fails")
 
+  local same = recordings .. "/already-published.mp3"
+  vim.fn.writefile({ "audio" }, same)
+  local same_size = vim.uv.fs_stat(same).size
+  Recorder._complete_finalization(
+    store,
+    model.recording({
+      id = "same-path",
+      path = same,
+      final_path = same,
+      status = "finalizing",
+      size_bytes = same_size,
+    })
+  )
+  H.eq(vim.uv.fs_stat(same).size, same_size, "same-path publication keeps the audio")
+  H.check(vim.uv.fs_stat(same .. ".json") ~= nil, "same-path publication keeps its sidecar")
+
+  store:save_recording(
+    model.recording({
+      id = "unrecoverable",
+      path = recordings .. "/gone.part",
+      final_path = recordings .. "/gone.mp3",
+      status = "finalizing",
+      size_bytes = 100,
+    })
+  )
+  H.eq(#Recorder.recover(store, opts), 1, "failed finalization warns once")
+  H.eq(store:recording("unrecoverable").status, "failed", "failed recovery reaches terminal status")
+  H.eq(#store:unfinished_recordings(), 0, "failed recovery no longer blocks deletion")
+  H.eq(#Recorder.recover(store, opts), 0, "next startup does not repeat permanent failure")
+  store:close()
   stop()
 end
