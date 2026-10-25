@@ -226,7 +226,9 @@ function Store.open(path)
   db:exec("PRAGMA journal_mode=WAL")
   db:exec("PRAGMA synchronous=NORMAL")
   db:exec("PRAGMA cache_size=-4096")
-  local self = setmetatable({ _db = db, path = path }, Store)
+  local bytes = { assert(vim.uv.random(3)):byte(1, 3) }
+  local seed = 1 + bytes[1] + bytes[2] * 256 + bytes[3] * 65536
+  local self = setmetatable({ _db = db, path = path, random_seed = seed }, Store)
   local ok, migrate_err = pcall(self.migrate, self)
   if not ok then
     db:close()
@@ -305,25 +307,63 @@ function Store:migrate()
         error("migration 4->5: " .. tostring(sql), 0)
       end
     end
-    self.fts5 = fts5_supported(db)
-    if self.fts5 then
-      for _, sql in ipairs(FTS_SCHEMA) do
-        local ok, exec_err = db:exec(sql)
-        if not ok then
-          self.fts5 = false
-          break
-        end
-      end
-      if self.fts5 then
-        db:exec("INSERT INTO station_search(station_search) VALUES ('rebuild')")
-      end
-    end
     db:exec("ANALYZE")
     db:exec("PRAGMA user_version=5")
-  else
-    self.fts5 = #db:execute("SELECT name FROM sqlite_master WHERE name='station_search'") > 0
   end
+  self:_prepare_search_index()
   return true
+end
+
+---FTS is optional and must be ready independently of the schema version.
+function Store:_prepare_search_index()
+  local db = self._db
+  self.fts5 = false
+  local object = db:execute("SELECT sql FROM sqlite_master WHERE name='station_search'")[1]
+  local compatible = not object
+    or (
+      object.sql
+      and object.sql:lower():find("create virtual table", 1, true)
+      and object.sql:lower():find("using%s+fts5%s*%(")
+      and object.sql:lower():find("trigram", 1, true)
+    )
+  if compatible and fts5_supported(db) then
+    local ok, index_err = pcall(function()
+      db:transaction(function()
+        for _, sql in ipairs(FTS_SCHEMA) do
+          local created, err = db:exec(sql)
+          if not created then
+            error(err, 0)
+          end
+        end
+        if not object or self:meta("station_search_ready") ~= "1" then
+          local rebuilt, err =
+            db:exec("INSERT INTO station_search(station_search) VALUES ('rebuild')")
+          if not rebuilt then
+            error(err, 0)
+          end
+        end
+        -- Verify MATCH is usable, including when opening an existing v5 DB.
+        db:execute("SELECT rowid FROM station_search WHERE station_search MATCH 'rad' LIMIT 1")
+        self:set_meta("station_search_ready", "1")
+      end)
+    end)
+    self.fts5 = ok
+    if not ok then
+      require("radio.log").debug("FTS unavailable: " .. tostring(index_err))
+    end
+  end
+  if not self.fts5 then
+    -- Legacy failed migrations may have installed triggers for a conflicting
+    -- ordinary table. Disable those writers before using substring search.
+    for _, name in ipairs({
+      "station_search_insert",
+      "station_search_delete",
+      "station_search_update",
+    }) do
+      db:exec("DROP TRIGGER IF EXISTS " .. name)
+    end
+    db:execute("DELETE FROM meta WHERE key='station_search_ready'")
+  end
 end
 
 function Store:close()
@@ -605,7 +645,7 @@ end
 
 ---@param filter table
 ---@return string
-local function search_order(filter)
+function Store:_search_order(filter)
   if filter.history then
     return "(SELECT max(id) FROM history WHERE uuid=s.uuid) DESC"
   end
@@ -619,7 +659,7 @@ local function search_order(filter)
     return "json_extract(s.json,'$.votes') DESC,s.name,s.uuid"
   end
   if filter.sort == "random" then
-    return "random()"
+    return "((s.rowid * " .. self.random_seed .. ") % 2147483647),s.uuid"
   end
   return "s.popularity DESC,s.name,s.uuid"
 end
@@ -629,11 +669,8 @@ end
 function Store:search(filter)
   filter = model.filter(filter)
   local where, args, source = self:_conditions(filter)
-  local order = search_order(filter)
-  local page_order = ""
-  if filter.history or filter.sort ~= "random" then
-    page_order = " ORDER BY " .. order
-  end
+  local order = self:_search_order(filter)
+  local page_order = " ORDER BY " .. order
   local bind = vim.deepcopy(args)
   bind[#bind + 1] = filter.limit
   bind[#bind + 1] = filter.offset
@@ -693,7 +730,7 @@ end
 function Store:station_position(uuid, filter)
   filter = model.filter(filter)
   local where, args, source = self:_conditions(filter)
-  local order = search_order(filter)
+  local order = self:_search_order(filter)
   local bind = vim.deepcopy(args)
   bind[#bind + 1] = uuid
   local row = self._db:execute([[
@@ -979,33 +1016,35 @@ end
 
 ---@param rows table[] stations from the directory
 function Store:stage(rows)
-  for _, station in ipairs(rows) do
-    station = model.station(station)
-    station.active = true
-    station.custom = false
-    self._db:execute(
-      [[INSERT INTO incoming (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url)
+  self._db:transaction(function()
+    for _, station in ipairs(rows) do
+      station = model.station(station)
+      station.active = true
+      station.custom = false
+      self._db:execute(
+        [[INSERT INTO incoming (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url)
         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
         ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
           country=excluded.country,languages=excluded.languages,tags=excluded.tags,
           bitrate=excluded.bitrate,popularity=excluded.popularity,custom=0,active=1,
           json=excluded.json,normalized_url=excluded.normalized_url]],
-      {
-        station.stationuuid,
-        station.name,
-        station:search_text(),
-        (station.countrycode or ""):upper(),
-        "," .. util.normalize_list(station.language .. "," .. station.languagecodes) .. ",",
-        "," .. util.normalize_list(station.tags) .. ",",
-        math.floor(station.bitrate),
-        math.floor(station.clickcount),
-        0,
-        1,
-        model.encode(station),
-        util.normalize_url(model.Station.primary_url(station)),
-      }
-    )
-  end
+        {
+          station.stationuuid,
+          station.name,
+          station:search_text(),
+          (station.countrycode or ""):upper(),
+          "," .. util.normalize_list(station.language .. "," .. station.languagecodes) .. ",",
+          "," .. util.normalize_list(station.tags) .. ",",
+          math.floor(station.bitrate),
+          math.floor(station.clickcount),
+          0,
+          1,
+          model.encode(station),
+          util.normalize_url(model.Station.primary_url(station)),
+        }
+      )
+    end
+  end)
 end
 
 ---Publish the staged snapshot; returns the number of staged unique rows.
