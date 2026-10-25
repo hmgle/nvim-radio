@@ -3,7 +3,7 @@ local function command(name, callback, opts)
   vim.api.nvim_create_user_command(name, function(info)
     local ok, err = pcall(callback, info)
     if not ok then
-      require("radio.log").error(tostring(err):gsub("^.-:%d+: ", ""))
+      require("radio.log").error(tostring(err))
     end
   end, opts)
 end
