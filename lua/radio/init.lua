@@ -30,7 +30,7 @@ function M._apply_keys()
       M.volume(-5)
     end,
     record = function()
-      local engine = M.engine()
+      local engine = assert(M.engine())
       engine:toggle_recording()
     end,
     status = function()
@@ -45,7 +45,12 @@ function M._apply_keys()
   }
   for name, lhs in pairs(keys) do
     if lhs and actions[name] then
-      vim.keymap.set("n", lhs, actions[name], { desc = "nvim-radio: " .. name })
+      vim.keymap.set("n", lhs, function()
+        local ok, err = pcall(actions[name])
+        if not ok then
+          require("radio.log").error(tostring(err):gsub("^.-:%d+: ", ""))
+        end
+      end, { desc = "nvim-radio: " .. name })
     end
   end
 end
@@ -223,8 +228,7 @@ end
 
 function M.open_recordings()
   local dir = require("radio.config").ensure().recording_dir
-  vim.system({ "xdg-open", dir }, {}, function() end)
-  vim.notify("[radio] opening " .. dir)
+  return require("radio.util").open_path(dir)
 end
 
 ---@return table[] devices

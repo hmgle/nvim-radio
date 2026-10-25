@@ -22,7 +22,7 @@ end
 ---@param suffix string
 ---@return boolean
 function M.endswith(s, suffix)
-  return type(s) == "string" and suffix == "" or s:sub(-#suffix) == suffix
+  return type(s) == "string" and (suffix == "" or s:sub(-#suffix) == suffix)
 end
 
 ---@param list any[]
@@ -314,6 +314,18 @@ function M.unique(list)
     end
   end
   return out
+end
+
+---Use Neovim's platform-specific opener and report launch failures.
+function M.open_path(path)
+  local ok, job, err = pcall(vim.ui.open, path)
+  if not ok or not job then
+    local message = tostring(ok and err or job)
+    require("radio.log").error(message)
+    return nil, message
+  end
+  require("radio.log").info("opening " .. path)
+  return job
 end
 
 return M

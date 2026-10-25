@@ -81,7 +81,12 @@ function UI.statusline()
 end
 
 function UI.hud()
-  UI.status().hud(UI.engine())
+  local engine, err = UI.engine()
+  if not engine then
+    log.error(err)
+    return
+  end
+  UI.status().hud(engine)
 end
 
 log.debug("ui module loaded")

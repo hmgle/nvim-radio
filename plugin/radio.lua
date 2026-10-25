@@ -1,3 +1,13 @@
+-- Report command failures through notifications instead of Ex tracebacks.
+local function command(name, callback, opts)
+  vim.api.nvim_create_user_command(name, function(info)
+    local ok, err = pcall(callback, info)
+    if not ok then
+      require("radio.log").error(tostring(err):gsub("^.-:%d+: ", ""))
+    end
+  end, opts)
+end
+
 -- User commands. The plugin module loads lazily on first command use.
 local completed = function(sub)
   return function(arg_lead, cmd_line)
@@ -14,27 +24,27 @@ local completed = function(sub)
   end
 end
 
-vim.api.nvim_create_user_command("Radio", function()
+command("Radio", function()
   require("radio").toggle()
 end, { desc = "Toggle the nvim-radio browser" })
 
-vim.api.nvim_create_user_command("RadioPlay", function(info)
+command("RadioPlay", function(info)
   require("radio").play(vim.trim(info.args))
 end, { nargs = 1, desc = "Play a station UUID or http(s) URL" })
 
-vim.api.nvim_create_user_command("RadioStop", function()
+command("RadioStop", function()
   require("radio").stop()
 end, { desc = "Stop playback" })
 
-vim.api.nvim_create_user_command("RadioPause", function()
+command("RadioPause", function()
   require("radio").pause()
 end, { desc = "Pause or resume playback" })
 
-vim.api.nvim_create_user_command("RadioMute", function()
+command("RadioMute", function()
   require("radio").mute()
 end, { desc = "Mute or unmute" })
 
-vim.api.nvim_create_user_command("RadioVolume", function(info)
+command("RadioVolume", function(info)
   local arg = vim.trim(info.args)
   local delta = tonumber(arg)
   if not delta then
@@ -47,7 +57,11 @@ vim.api.nvim_create_user_command("RadioVolume", function(info)
     return
   end
   local radio = require("radio")
-  local engine = radio.engine()
+  local engine, err = radio.engine()
+  if not engine then
+    require("radio.log").error(err)
+    return
+  end
   if arg:sub(1, 1) == "+" or arg:sub(1, 1) == "-" then
     radio.volume(delta)
   else
@@ -55,7 +69,7 @@ vim.api.nvim_create_user_command("RadioVolume", function(info)
   end
 end, { nargs = 1, desc = "Set or adjust volume" })
 
-vim.api.nvim_create_user_command("RadioRecord", function(info)
+command("RadioRecord", function(info)
   local args = vim.split(vim.trim(info.args), "%s+")
   local duration, dir = nil, nil
   local index = 1
@@ -63,6 +77,9 @@ vim.api.nvim_create_user_command("RadioRecord", function(info)
     local arg = args[index]
     if arg == "--output-dir" then
       dir = args[index + 1]
+      if not dir or dir == "" or dir:sub(1, 2) == "--" then
+        error("usage: RadioRecord [duration] --output-dir <directory>", 0)
+      end
       index = index + 2
     elseif arg ~= "" then
       duration = arg
@@ -74,28 +91,28 @@ vim.api.nvim_create_user_command("RadioRecord", function(info)
   require("radio").record(duration, dir)
 end, { nargs = "*", desc = "Record the playing station (e.g. 30m --output-dir ~/music)" })
 
-vim.api.nvim_create_user_command("RadioRecordStop", function()
+command("RadioRecordStop", function()
   require("radio").record_stop()
 end, { desc = "Stop and publish the recording" })
 
-vim.api.nvim_create_user_command("RadioRandom", function(info)
+command("RadioRandom", function(info)
   local query = vim.trim(info.args)
   require("radio").random(query ~= "" and { query = query } or nil)
 end, { nargs = "*", desc = "Play a random station (optional query)" })
 
-vim.api.nvim_create_user_command("RadioSync", function()
+command("RadioSync", function()
   require("radio").sync()
 end, { desc = "Sync the Radio Browser catalog" })
 
-vim.api.nvim_create_user_command("RadioStatus", function()
+command("RadioStatus", function()
   require("radio").status()
 end, { desc = "Show the playback/recording HUD" })
 
-vim.api.nvim_create_user_command("RadioDoctor", function()
+command("RadioDoctor", function()
   vim.notify("[radio] doctor\n" .. table.concat(require("radio").doctor(), "\n"))
 end, { desc = "Run diagnostics" })
 
-vim.api.nvim_create_user_command("RadioDevices", function()
+command("RadioDevices", function()
   local devices = require("radio").devices()
   local lines = {}
   for _, device in ipairs(devices) do
@@ -104,7 +121,7 @@ vim.api.nvim_create_user_command("RadioDevices", function()
   vim.notify("[radio] audio devices\n" .. table.concat(lines, "\n"))
 end, { desc = "List mpv audio output devices" })
 
-vim.api.nvim_create_user_command("RadioFavorites", function(info)
+command("RadioFavorites", function(info)
   local args = vim.split(vim.trim(info.args), "%s+")
   local radio = require("radio")
   local action = args[1] or "list"
@@ -125,7 +142,7 @@ vim.api.nvim_create_user_command("RadioFavorites", function(info)
   vim.notify("[radio] favorites (" .. #stations .. ")\n" .. table.concat(lines, "\n"))
 end, { nargs = "*", desc = "List favorites or add/remove one" })
 
-vim.api.nvim_create_user_command("RadioHistory", function()
+command("RadioHistory", function()
   local stations = require("radio").history()
   local lines = {}
   for _, station in ipairs(stations) do
@@ -134,7 +151,7 @@ vim.api.nvim_create_user_command("RadioHistory", function()
   vim.notify("[radio] history (" .. #stations .. ")\n" .. table.concat(lines, "\n"))
 end, { desc = "Show recent playback history" })
 
-vim.api.nvim_create_user_command("RadioRecordings", function(info)
+command("RadioRecordings", function(info)
   local args = vim.split(vim.trim(info.args), "%s+")
   local radio = require("radio")
   if args[1] == "play" and args[2] then
@@ -164,7 +181,7 @@ end, {
   desc = "List recordings or play/remove one",
 })
 
-vim.api.nvim_create_user_command("RadioStationAdd", function(info)
+command("RadioStationAdd", function(info)
   local args = vim.split(vim.trim(info.args), "%s+")
   if #args < 2 then
     vim.notify("[radio] usage: RadioStationAdd <name> <url>", vim.log.levels.ERROR)
@@ -175,10 +192,10 @@ vim.api.nvim_create_user_command("RadioStationAdd", function(info)
   vim.notify("[radio] station added: " .. station.name .. " (" .. station.stationuuid .. ")")
 end, { nargs = "+", desc = "Add a custom station" })
 
-vim.api.nvim_create_user_command("RadioStationRemove", function(info)
+command("RadioStationRemove", function(info)
   require("radio").station_remove(vim.trim(info.args))
 end, { nargs = 1, desc = "Remove a custom station" })
 
-vim.api.nvim_create_user_command("RadioOpenRecordings", function()
+command("RadioOpenRecordings", function()
   require("radio").open_recordings()
 end, { desc = "Open the recordings directory" })

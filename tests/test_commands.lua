@@ -82,5 +82,53 @@ return function()
   vim.cmd("RadioVolume 70")
   H.eq(engine.status.volume, 70, "absolute volume")
 
+  local notify = vim.notify
+  local notifications = {}
+  vim.notify = function(message, level)
+    notifications[#notifications + 1] = { message, level }
+  end
+  for _, command in ipairs({
+    "RadioRecord abc",
+    "RadioRecord --output-dir",
+    "RadioRecordings remove nope",
+    "RadioFavorites add not-a-uuid",
+    "RadioStationAdd Foo notaurl",
+  }) do
+    notifications = {}
+    H.check(pcall(vim.cmd, command), "invalid command reports without traceback: " .. command)
+    H.eq(#notifications, 1, "invalid command emits one error")
+    H.eq(
+      notifications[1] and notifications[1][2],
+      vim.log.levels.ERROR,
+      "invalid command notifies at error level"
+    )
+  end
+  local original_engine = radio.engine
+  radio.engine = function()
+    return nil, "media_busy: test owner"
+  end
+  for _, command in ipairs({
+    "RadioVolume 70",
+    "RadioVolume +5",
+    "RadioPause",
+    "RadioRecord",
+    "RadioRandom",
+  }) do
+    notifications = {}
+    H.check(pcall(vim.cmd, command), "busy command reports without traceback: " .. command)
+    H.check(
+      #notifications == 1 and notifications[1][1]:find("media_busy", 1, true),
+      "busy reason reaches user"
+    )
+  end
+  radio.engine = original_engine
+  local open = vim.ui.open
+  vim.ui.open = function()
+    error("opener missing")
+  end
+  H.check(pcall(radio.open_recordings), "platform opener launch failure is reported")
+  vim.ui.open = open
+  vim.notify = notify
+
   engine:shutdown()
 end
