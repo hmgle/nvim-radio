@@ -90,6 +90,23 @@ return function()
   H.check(vim.uv.fs_stat(record.path) ~= nil, "recording file published")
   H.eq(#engine.store:unfinished_recordings(), 0, "nothing pending")
 
+  -- Local paths with URI-sensitive characters must reach mpv unchanged.
+  local local_path = dir .. "/recordings/local # 中文 %.mp3"
+  assert(vim.uv.fs_rename(record.path, local_path))
+  record.path = local_path
+  engine.store:save_recording(record)
+  local history_size = #engine.store:search(model.filter({ history = true }))
+  engine:play_recording(record.id)
+  H.wait_for(8000, function()
+    return engine:playing()
+  end, "published recording plays locally")
+  H.eq(engine.status.source_url, local_path, "local playback uses the actual path")
+  H.eq(
+    #engine.store:search(model.filter({ history = true })),
+    history_size,
+    "local play leaves history intact"
+  )
+
   -- Playing an invalid target fails cleanly.
   engine:play("not-a-station")
   H.eq(engine.status.playback_state, "failed", "invalid target fails")

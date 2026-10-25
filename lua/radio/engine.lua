@@ -208,14 +208,18 @@ function Engine:_ensure_timer()
     return
   end
   self.timer = vim.uv.new_timer()
-  self.timer:start(0, TICK_MS, function()
-    local ok, err = pcall(function()
-      self:tick()
+  self.timer:start(
+    0,
+    TICK_MS,
+    vim.schedule_wrap(function()
+      local ok, err = pcall(function()
+        self:tick()
+      end)
+      if not ok then
+        log.error("tick error: " .. tostring(err))
+      end
     end)
-    if not ok then
-      log.debug("tick error: " .. tostring(err))
-    end
-  end)
+  )
 end
 
 function Engine:_stop_timer()
@@ -297,7 +301,7 @@ function Engine:play(target)
   if util.is_uuid(target) then
     local station = self.store:station(target)
     if not station then
-      self:_fail_playback("station_not_found")
+      self:_reject_playback("station_not_found")
       return
     end
     self:play_station(station)
@@ -305,7 +309,7 @@ function Engine:play(target)
   end
   local ok = util.validate_url(target)
   if not ok then
-    self:_fail_playback("invalid_url")
+    self:_reject_playback("invalid_url")
     return
   end
   local station = model.station({
@@ -317,6 +321,18 @@ function Engine:play(target)
     active = true,
   })
   self:_play_source(station, { target }, "ephemeral")
+end
+
+---Reject a new target without entering the previous request's fallback chain.
+function Engine:_reject_playback(reason)
+  self:stop_playback()
+  self:_stop_recording(reason)
+  self.candidates = {}
+  self.random_filter = nil
+  self.status.station = nil
+  self.status.source_url = ""
+  self.url = nil
+  self:_exhausted(reason)
 end
 
 ---@param station table
@@ -336,16 +352,16 @@ function Engine:play_recording(id)
   end
   local record = self.store:recording(id)
   if not record then
-    self:_fail_playback("recording_not_found")
+    self:_reject_playback("recording_not_found")
     return
   end
   if record.status == "recording" or record.status == "finalizing" or record.recovery_pending then
-    self:_fail_playback("recording_in_use")
+    self:_reject_playback("recording_in_use")
     return
   end
   local path = vim.uv.fs_realpath(record.path)
   if not path then
-    self:_fail_playback("recording file missing")
+    self:_reject_playback("recording file missing")
     return
   end
   local station = model.station({
@@ -354,7 +370,7 @@ function Engine:play_recording(id)
     custom = true,
   })
   self.random_filter = nil
-  self:_play_source(station, { vim.uri_from_fspath(path) }, "local")
+  self:_play_source(station, { path }, "local")
   self.local_recording_id = id
 end
 
@@ -410,6 +426,7 @@ function Engine:_start_url()
   local o = config.options
   self:_ensure_timer()
   self.started_at = vim.uv.now()
+  self.paused = false
   self.confirmed = false
   self.status.playback_state = self.reconnect_attempts > 0 and PlaybackState.Reconnecting
     or PlaybackState.Connecting
@@ -465,8 +482,12 @@ function Engine:_on_player_event(event)
   if kind == "playing" then
     self.reconnect_attempts = 0
     self.reconnect_due = nil
-    self.status.playback_state = PlaybackState.Playing
-    self:_say("playing: " .. (self.status.station and self.status.station.name or ""))
+    self.status.playback_state = self.paused and PlaybackState.Paused or PlaybackState.Playing
+    self:_say(
+      (self.paused and "paused: " or "playing: ")
+        .. (self.status.station and self.status.station.name or "")
+    )
+    -- Confirmation also applies when mpv was paused while connecting.
     if not self.confirmed then
       self.confirmed = true
       self:_on_confirmed()
@@ -477,6 +498,7 @@ function Engine:_on_player_event(event)
       self:emit()
     end
   elseif kind == "paused" then
+    self.paused = event.paused
     if self.confirmed then
       self.status.playback_state = event.paused and PlaybackState.Paused or PlaybackState.Playing
       self:emit()
@@ -495,7 +517,7 @@ function Engine:_on_player_event(event)
   elseif kind == "failed" then
     self:_player_failed(event.code .. (event.device and (": " .. event.device) or ""))
   elseif kind == "exited" or kind == "closed" then
-    if self.player and not self.closing_player then
+    if self.player then
       self:_stream_failed("player " .. kind)
     end
   end
@@ -635,10 +657,8 @@ end
 ---@param reason string
 function Engine:_exhausted(reason)
   if self.random_filter and #self.random_tried < RANDOM_TRIES then
-    local ok = pcall(function()
-      self:_pick_random()
-    end)
-    if ok then
+    local ok, picked = pcall(self._pick_random, self)
+    if ok and picked then
       return
     end
   end
@@ -646,6 +666,7 @@ function Engine:_exhausted(reason)
   self.reconnect_attempts = 0
   self.reconnect_window = {}
   self.status.muted = false
+  self.status.title = ""
   self.status.playback_state = PlaybackState.Failed
   self:_say("playback failed: " .. reason)
 end
@@ -657,20 +678,27 @@ function Engine:random(filter)
   end
   self.random_tried = self.status.station and { self.status.station.stationuuid } or {}
   self.random_filter = model.filter(filter)
-  self:_pick_random()
+  local picked, err = self:_pick_random()
+  if not picked then
+    self.random_filter = nil
+    self:_say(err)
+    return nil, err
+  end
+  return true
 end
 
 function Engine:_pick_random()
   local filter = self.random_filter
   if not filter then
-    error("random_disabled")
+    return nil, "random_disabled"
   end
   local station = self.store:random(filter, self.random_tried)
   if not station then
-    error("no_matching_station")
+    return nil, "no_matching_station"
   end
   self.random_tried[#self.random_tried + 1] = station.stationuuid
   self:play_station(station)
+  return true
 end
 
 ---@param delta integer
@@ -706,9 +734,7 @@ end
 
 function Engine:stop_playback()
   local closing = self.player or self.starting_player
-  self.closing_player = true
   self:_retire_player()
-  self.closing_player = nil
   -- Cancel any pending reconnect so a stop during the backoff is final.
   self.reconnect_due = nil
   self.reconnect_attempts = 0
@@ -765,12 +791,12 @@ function Engine:record_current(duration, dir)
   if self.stopping or not self.store then
     return
   end
-  if self.source_kind == "local" or self.source_kind == "ephemeral" then
-    self:_fail_recording(self.source_kind == "local" and "local_recording" or "ephemeral_recording")
-    return
-  end
   if not self:playing() then
     self:_fail_recording("wait_for_playback")
+    return
+  end
+  if self.source_kind == "local" or self.source_kind == "ephemeral" then
+    self:_fail_recording(self.source_kind == "local" and "local_recording" or "ephemeral_recording")
     return
   end
   local station = self.status.station
@@ -833,12 +859,15 @@ function Engine:_record_source(station, candidates, duration, dir)
           attempt("probe failed: " .. err)
           return
         end
-        local recorder, start_err = recorder_mod.start({
+        local started, recorder, start_err = pcall(recorder_mod.start, {
           ffmpeg = o.ffmpeg,
           ffprobe = o.ffprobe,
           playback_timeout_secs = o.playback_timeout_secs,
           recording_min_free_mb = o.recording_min_free_mb,
         }, self.store, station, url, dir or o.recording_dir, duration, info, task.track)
+        if not started then
+          start_err, recorder = tostring(recorder), nil
+        end
         if not recorder then
           attempt(start_err)
           return

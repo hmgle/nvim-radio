@@ -19,6 +19,7 @@ local suites = {
   "test_async",
   "test_lifecycle",
   "test_engine",
+  "test_playback_edges",
   "test_ui",
   "test_regressions",
   "test_commands",
