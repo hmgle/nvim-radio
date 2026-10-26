@@ -7,6 +7,9 @@ follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
 ### Fixed
 
+- Publish recordings with atomic hard links instead of check-then-rename,
+  preserving concurrently created destination files and recovering safely
+  when interrupted before removing the partial name.
 - Cancel queued automatic resume when an explicit playback or stop request
   supersedes it, preserving the user's first command after startup.
 - Coordinate recovery with every nvim-radio session, including shared and

@@ -215,6 +215,9 @@ count. Interrupted recordings keep their partial file; they are marked
 `interrupted` and recovered on the next start. Switching stations ends the
 current recording. Pausing playback does not pause recording.
 
+The recording filesystem must support hard links for atomic publication.
+If linking fails, the partial audio is retained and the error is reported.
+
 On exit, pending catalog requests and recording probes are cancelled. Recordings
 get a bounded window to finish; overdue recordings keep their `.part` file and
 recovery metadata. The database and session lock remain owned until outstanding

@@ -255,25 +255,33 @@ end
 ---@param final_path string
 ---@return boolean ok, string|nil err
 local function publish(partial, final_path)
-  if
-    partial == final_path
-    or (
-      vim.uv.fs_realpath(partial) ~= nil
-      and vim.uv.fs_realpath(partial) == vim.uv.fs_realpath(final_path)
-    )
-  then
+  if partial == final_path then
     return true
   end
-  if vim.uv.fs_stat(final_path) then
+  -- Creating a hard link is atomic and fails if the destination exists.
+  -- Both names are in the recording directory, on the same filesystem.
+  -- Never fall back to rename: it can overwrite a concurrently created file.
+  local linked, link_err, code = vim.uv.fs_link(partial, final_path)
+  if not linked then
+    if code ~= "EEXIST" then
+      return false, "recording_publish: " .. tostring(link_err)
+    end
+    -- A previous publication may have linked successfully and stopped before
+    -- unlinking the partial. Only the same regular inode permits that retry.
     local source = vim.uv.fs_lstat(partial)
     local target = vim.uv.fs_lstat(final_path)
-    if not source or not target or source.dev ~= target.dev or source.ino ~= target.ino then
+    if
+      not source
+      or not target
+      or source.type ~= "file"
+      or target.type ~= "file"
+      or source.dev ~= target.dev
+      or source.ino ~= target.ino
+    then
       return false, "recording_publish"
     end
-    local ok = vim.uv.fs_unlink(partial)
-    return ok ~= nil, ok ~= nil and nil or "recording_publish"
   end
-  local ok, err = vim.uv.fs_rename(partial, final_path)
+  local ok, err = vim.uv.fs_unlink(partial)
   if not ok then
     return false, "recording_publish: " .. tostring(err)
   end

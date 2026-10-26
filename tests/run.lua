@@ -21,6 +21,7 @@ local suites = {
   "test_player",
   "test_probes",
   "test_recorder",
+  "test_publication",
   "test_recorder_faults",
   "test_sidecar",
   "test_recording_remove",
