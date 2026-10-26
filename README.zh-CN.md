@@ -66,7 +66,8 @@ require("radio").setup({ volume = 80 })
 ```
 
 浏览器按当前过滤条件打开：`i` 搜索，`F` 过滤，`Enter` 播放，`r` 录音，`q`
-关闭。过滤值菜单支持前缀搜索和上下翻页。结果分页浏览（`L` / `H`），顶栏实时显示播放与录音状态。随机排序在当前会话中
+关闭。过滤值菜单支持前缀搜索和上下翻页。结果分页浏览（`L` / `H`），顶栏实时显示
+播放与录音状态。随机排序在当前会话中
 保持顺序稳定，避免翻页时重复显示电台。`:RadioSync` 按每页 1000 个电台分页拉取并原子发布；目录缩水超过 25%
 时需要确认才会接受。
 
@@ -241,11 +242,13 @@ radio.statusline()
 stylua --check lua plugin tests
 nvim --headless -l tests/run.lua                    # 完整测试
 NVIM_RADIO_TESTS=test_player nvim --headless -l tests/run.lua
+nvim --headless -u NONE -l tests/benchmark_sync.lua # 5 万条电台的同步耗时
 ```
 
 测试使用进程内 HTTP 服务器与真实 `mpv`/`ffmpeg`/`ffprobe`；目录测试使用
 本地假 Radio Browser 服务器，默认测试无需外网。锁测试会启动独立的
 Neovim 进程，生命周期测试覆盖取消、强制终止子进程与恢复。
+CI 在 Neovim 0.10.0 与最新稳定版上运行完整测试，使用 mpv 的静音输出。
 
 ## 许可证
 

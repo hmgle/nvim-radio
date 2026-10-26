@@ -7,6 +7,16 @@ follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
 ### Fixed
 
+- Keep recording cleanup and completion callbacks running after database
+  write failures; report persistence errors and retain recovery metadata.
+- Treat JSON null values from radio-cli as absent optional fields.
+- Render multiline station data and recording errors safely in browser
+  lists, details, the status HUD, and statusline.
+- Preserve recording indexes on file deletion errors other than ENOENT;
+  share deletion behavior between the browser and public API.
+- Remove plugin-owned keymaps when repeated setup disables or changes them,
+  preserving user replacements and buffer-local mappings.
+- Support Neovim 0.10 filesystem statistics without a `frsize` field.
 - Restore `false` as the disabled global keymap value, report zero-byte
   recordings explicitly, and avoid adopting a mismatched final recording file
   during recovery.
@@ -52,12 +62,21 @@ follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
 ### Added
 
+- Prefix search and page navigation for country, language, and tag values.
+- Fault injection, radio-cli JSON fixtures, and CI coverage for Neovim
+  0.10.0 and the latest stable release.
 - Result paging with `L` / `H` / PageDown / PageUp and a visible range.
 - Unsubscribe functions returned by engine status subscriptions.
 - Offline regression coverage for separate-process lock contention and
   crash release, stale network responses, overlapping finalizers,
   cancelled verification, delayed child exits, repeated mpv sessions,
   SIGINT-ignoring ffmpeg, browser replacement, paging, and command parsing.
+
+### Changed
+
+- Skip redundant station writes during catalog publication and refresh
+  search statistics in one SQL transaction. Add a manual sync benchmark
+  with 50,000 synthetic stations. Catalog publication remains synchronous.
 
 ## [0.1.0] - 2026-10-24
 
