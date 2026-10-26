@@ -187,6 +187,19 @@ return function()
   browser:_render_preview()
   H.eq(vim.api.nvim_get_current_win(), user_window, "preview refresh preserves focus")
 
+  -- The update path above is not the only risk: recreating the float after it
+  -- was closed also ran from asynchronous callbacks and moved focus too.
+  vim.api.nvim_win_set_cursor(browser.win, { 1, 0 })
+  browser:_render_preview()
+  H.check(browser.preview_win == nil, "header cursor closes the details pane")
+  vim.api.nvim_set_current_win(user_window)
+  browser:render()
+  H.check(
+    browser.preview_win ~= nil and vim.api.nvim_win_is_valid(browser.preview_win),
+    "refresh recreates the details pane"
+  )
+  H.eq(vim.api.nvim_get_current_win(), user_window, "recreating the details pane preserves focus")
+
   -- Replacing the details buffer must not leave a stale buffer/window pair.
   local stale_preview = browser.preview_buf
   vim.api.nvim_set_current_win(browser.preview_win)

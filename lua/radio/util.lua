@@ -238,9 +238,6 @@ function M.host_path(url)
   return (host or "") .. (path or "")
 end
 
----Escape LIKE wildcards for substring matching without wildcards.
----@param s string
----@return string
 ---Truncate to `max_chars` UTF-8 characters, appending an ellipsis when cut.
 ---Byte slicing would split multibyte characters.
 ---@param s string|nil
