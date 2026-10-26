@@ -7,6 +7,15 @@ follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
 ### Fixed
 
+- Run automatic recording recovery only while holding the exclusive
+  session lock, preserving live recordings in shared or forced sessions.
+- Use Unicode lowercase mappings consistently for search indexes, queries,
+  language and tag filters, and facets; upgrade existing derived text.
+- Show complete recording IDs in command listings so they can be copied
+  directly into playback and removal commands.
+- Track original partial paths and remove superseded sidecars after
+  metadata recovery. Keep cleanup failures retryable and verify ownership
+  before cleaning sidecars for older records.
 - Always settle catalog sync after storage errors, even when saving the
   diagnostic report also fails, so later sync attempts can proceed.
 - Preserve existing sidecar JSON on write, close, or rename failures.
