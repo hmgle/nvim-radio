@@ -7,6 +7,8 @@ follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
 ### Fixed
 
+- Cancel queued automatic resume when an explicit playback or stop request
+  supersedes it, preserving the user's first command after startup.
 - Coordinate recovery with every nvim-radio session, including shared and
   forced sessions, so mixed startup order cannot expose active recordings
   to recovery or deletion. Hold recovery leases until child cleanup ends.

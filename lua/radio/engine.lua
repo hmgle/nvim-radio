@@ -153,8 +153,9 @@ function Engine.new(opts)
       station
       and #model.Station.stream_candidates(station, self.store:backups(resume_station)) > 0
     then
+      local generation = self.generation
       vim.schedule(function()
-        if self.stopping then
+        if self.stopping or self.generation ~= generation then
           return
         end
         self:play_station(station)

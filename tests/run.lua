@@ -32,6 +32,7 @@ local suites = {
   "test_shared_sessions",
   "test_engine",
   "test_playback_edges",
+  "test_resume",
   "test_ui",
   "test_browser_edges",
   "test_regressions",
