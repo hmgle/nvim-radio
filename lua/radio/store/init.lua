@@ -101,14 +101,14 @@ local function station_values(station)
   end
   for _, list in ipairs({ station.language, station.languagecodes }) do
     for item in (list or ""):gmatch("[^,]+") do
-      local value = util.trim(item):lower()
+      local value = util.lower(util.trim(item))
       if value ~= "" then
         values[FACET_LANGUAGE .. "\0" .. value] = true
       end
     end
   end
   for item in (station.tags or ""):gmatch("[^,]+") do
-    local value = util.trim(item):lower()
+    local value = util.lower(util.trim(item))
     if value ~= "" then
       values[FACET_TAG .. "\0" .. value] = true
     end
@@ -176,7 +176,7 @@ function Store:rebuild_facets()
     for _, column in ipairs({ "languages", "tags" }) do
       local kind = column == "languages" and FACET_LANGUAGE or FACET_TAG
       for item in (row[column] or ""):gmatch("[^,]+") do
-        local value = util.trim(item):lower()
+        local value = util.lower(util.trim(item))
         if value ~= "" then
           values[facet_key(kind, value)] = true
         end
@@ -312,7 +312,30 @@ function Store:migrate()
     db:exec("PRAGMA user_version=5")
   end
   self:_prepare_search_index()
+  self:_normalize_search_text()
   return true
+end
+
+---Upgrade derived text without changing the schema shared with radio-cli.
+function Store:_normalize_search_text()
+  if self:meta("search_text_normalization") == "unicode-lower-v1" then
+    return
+  end
+  self._db:transaction(function()
+    for _, row in ipairs(self._db:execute("SELECT uuid,search,languages,tags FROM stations")) do
+      local search, languages, tags =
+        util.lower(row.search), util.lower(row.languages), util.lower(row.tags)
+      if search ~= row.search or languages ~= row.languages or tags ~= row.tags then
+        self._db:execute(
+          "UPDATE stations SET search=?2,languages=?3,tags=?4 WHERE uuid=?1",
+          { row.uuid, search, languages, tags }
+        )
+      end
+    end
+    self:rebuild_facets()
+    self:set_meta("search_text_normalization", "unicode-lower-v1")
+  end)
+  self:refresh_search_stats()
 end
 
 ---FTS is optional and must be ready independently of the schema version.
@@ -597,15 +620,15 @@ function Store:_conditions(filter)
   end
   if filter.language and filter.language ~= "" then
     clauses[#clauses + 1] = "instr(s.languages,?)>0"
-    args[#args + 1] = "," .. util.trim(filter.language):lower() .. ","
+    args[#args + 1] = "," .. util.lower(util.trim(filter.language)) .. ","
   end
   if filter.tag and filter.tag ~= "" then
     clauses[#clauses + 1] = "instr(s.tags,?)>0"
-    args[#args + 1] = "," .. util.trim(filter.tag):lower() .. ","
+    args[#args + 1] = "," .. util.lower(util.trim(filter.tag)) .. ","
   end
   if filter.query ~= "" then
     local codes = territories.matching_codes(filter.query)
-    local normalized = filter.query:lower()
+    local normalized = util.lower(filter.query)
     if filter.country == nil and (filter.language ~= nil or filter.tag ~= nil) then
       source = "stations s NOT INDEXED"
     end

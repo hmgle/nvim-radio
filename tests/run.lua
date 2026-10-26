@@ -16,6 +16,7 @@ local suites = {
   "test_lock",
   "test_store",
   "test_store_edges",
+  "test_unicode_search",
   "test_sync_publication",
   "test_player",
   "test_probes",

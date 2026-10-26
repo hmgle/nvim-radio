@@ -632,7 +632,7 @@ function Browser:_facet_filter(kind, apply, prefix, offset)
       vim.ui.input({ prompt = "Value prefix (empty for all): ", default = prefix }, function(query)
         if query ~= nil then
           query = util.trim(query)
-          query = kind == 0 and query:upper() or query:lower()
+          query = kind == 0 and query:upper() or util.lower(query)
           self:_facet_filter(kind, apply, query, 0)
         end
       end)

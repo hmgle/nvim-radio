@@ -128,17 +128,15 @@ end
 ---Lowercase haystack used by the substring search predicate.
 ---@return string
 function Station.search_text(self)
-  return table
-    .concat({
-      self.name or "",
-      self.country or "",
-      self.countrycode or "",
-      self.state or "",
-      self.language or "",
-      self.languagecodes or "",
-      self.tags or "",
-    }, " ")
-    :lower()
+  return util.lower(table.concat({
+    self.name or "",
+    self.country or "",
+    self.countrycode or "",
+    self.state or "",
+    self.language or "",
+    self.languagecodes or "",
+    self.tags or "",
+  }, " "))
 end
 
 M.Station = Station

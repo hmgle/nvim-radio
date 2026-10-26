@@ -143,14 +143,17 @@ function M.clean_text(s)
   return table.concat(out)
 end
 
----Lowercase a value for storage/search (ASCII fast path).
+---Lowercase a value for storage/search using Neovim's Unicode mapping.
 ---@param s string?
 ---@return string
 function M.lower(s)
   if type(s) ~= "string" then
     return ""
   end
-  return s:lower()
+  if not s:find("[\128-\255]") then
+    return s:lower()
+  end
+  return vim.fn.tolower(s)
 end
 
 ---Normalize a comma separated list: split, trim, lowercase, drop empties.
@@ -162,7 +165,7 @@ function M.normalize_list(s)
   end
   local out = {}
   for item in s:gmatch("[^,]+") do
-    local value = M.trim(item):lower()
+    local value = M.lower(M.trim(item))
     if value ~= "" then
       out[#out + 1] = value
     end
