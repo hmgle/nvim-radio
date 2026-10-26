@@ -317,9 +317,30 @@ local function write_sidecar(record)
   return true
 end
 
+---Find the original partial path in older completed rows only when its
+---sidecar proves that it belongs to this recording.
+local function restore_partial_path(record)
+  if record.partial_path or record.status ~= "complete" or record.path ~= record.final_path then
+    return
+  end
+  local partial = record.path .. ".part"
+  local fd = vim.uv.fs_open(partial .. ".json", "r", 0)
+  if not fd then
+    return
+  end
+  local stat = vim.uv.fs_fstat(fd)
+  local json = stat and stat.size <= 1024 * 1024 and vim.uv.fs_read(fd, stat.size, 0) or nil
+  vim.uv.fs_close(fd)
+  local previous = json and model.decode_recording(json)
+  if previous and previous.id == record.id and previous.path == partial then
+    record.partial_path = partial
+  end
+end
+
 ---Keep either persistence failure retryable, even on separate filesystems.
 ---@return boolean saved, string|nil err
 local function persist_recording(store, record)
+  restore_partial_path(record)
   local errors = {}
   local sidecar, sidecar_err = write_sidecar(record)
   if not sidecar then
@@ -336,6 +357,27 @@ local function persist_recording(store, record)
       local marked, mark_err = write_sidecar(record)
       if not marked then
         errors[#errors + 1] = mark_err
+      end
+    end
+  end
+  if
+    #errors == 0
+    and record.status == "complete"
+    and record.partial_path
+    and record.partial_path ~= record.path
+  then
+    local path = record.partial_path .. ".json"
+    local removed, err, code = vim.uv.fs_unlink(path)
+    if not removed and code ~= "ENOENT" then
+      record.recovery_pending = true
+      errors[#errors + 1] = "recording_sidecar_cleanup: " .. path .. ": " .. tostring(err)
+      local marked, mark_err = write_sidecar(record)
+      if not marked then
+        errors[#errors + 1] = mark_err
+      end
+      local indexed, index_err = pcall(store.save_recording, store, record)
+      if not indexed then
+        errors[#errors + 1] = "recording_store: " .. tostring(index_err)
       end
     end
   end
@@ -454,6 +496,7 @@ function Recorder.start(opts, store, station, url, dir, duration, info, track)
       codec = codec,
       container = muxer,
       path = partial,
+      partial_path = partial,
       final_path = final_path,
       status = "recording",
     }),
@@ -736,9 +779,7 @@ function Recorder:finish(reason, cb)
       self.record.status = "complete"
       self.record.error = nil
       self.record.recovery_pending = false
-      if self:_persist_recording() then
-        vim.uv.fs_unlink(self.partial .. ".json")
-      end
+      self:_persist_recording()
       self:_settle(nil)
       return
     end
@@ -884,6 +925,9 @@ function Recorder._complete_finalization(store, record)
   if not final_path then
     error("final_path_missing")
   end
+  if partial ~= final_path then
+    record.partial_path = record.partial_path or partial
+  end
   if vim.uv.fs_stat(partial) then
     local published, publish_err = publish(partial, final_path)
     if not published then
@@ -902,9 +946,6 @@ function Recorder._complete_finalization(store, record)
   local saved, err = persist_recording(store, record)
   if not saved then
     return false, err
-  end
-  if partial ~= final_path then
-    vim.uv.fs_unlink(partial .. ".json")
   end
   return true
 end

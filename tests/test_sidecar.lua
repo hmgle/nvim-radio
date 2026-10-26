@@ -7,6 +7,7 @@ return function()
   local dir = H.tmpdir("sidecar")
   config.setup({ data_dir = dir, recording_min_free_mb = 1, auto_sync_days = 0 })
   local store = assert(require("radio.store").open(config.options.db_path))
+  local Engine = require("radio.engine")
   local uv = vim.uv
   local original =
     { open = uv.fs_open, write = uv.fs_write, close = uv.fs_close, rename = uv.fs_rename }
@@ -200,7 +201,34 @@ return function()
     uv.fs_stat(publishing.partial .. ".json") ~= nil,
     "publication failure retains the previous partial sidecar"
   )
+  H.eq(
+    store:recording(publishing.record.id).partial_path,
+    publishing.partial,
+    "publication retains the original partial path in storage"
+  )
   uv.fs_rename = original.rename
+  local unlink = uv.fs_unlink
+  uv.fs_unlink = function(path, ...)
+    if path == publishing.partial .. ".json" then
+      return nil, "EACCES: partial sidecar cleanup failed", "EACCES"
+    end
+    return unlink(path, ...)
+  end
+  local cleanup_warnings = Recorder.recover(store, opts)
+  H.check(
+    #cleanup_warnings == 1 and cleanup_warnings[1]:find("recording_sidecar_cleanup", 1, true),
+    "partial sidecar cleanup failure is reported"
+  )
+  H.eq(
+    store:recording(publishing.record.id).recovery_pending,
+    true,
+    "cleanup failure keeps the recording retryable"
+  )
+  H.check(
+    uv.fs_stat(publishing.partial .. ".json") ~= nil,
+    "cleanup failure retains the old metadata for retry"
+  )
+  uv.fs_unlink = unlink
   H.eq(#Recorder.recover(store, opts), 0, "recovery repairs the final sidecar")
   H.eq(
     store:recording(publishing.record.id).status,
@@ -212,6 +240,70 @@ return function()
     false,
     "metadata recovery clears the persisted marker"
   )
+  H.eq(
+    uv.fs_stat(publishing.partial .. ".json"),
+    nil,
+    "metadata recovery removes the superseded partial sidecar"
+  )
+  local removing = setmetatable({ store = store, recordings_revision = 0, listeners = {} }, Engine)
+  removing:remove_recording(publishing.record.id)
+  H.eq(store:recording(publishing.record.id), nil, "recovered recording index can be removed")
+  H.eq(uv.fs_stat(publishing.final_path), nil, "deletion removes recovered audio")
+  H.eq(
+    uv.fs_stat(publishing.final_path .. ".json"),
+    nil,
+    "deletion removes recovered final metadata"
+  )
+  H.eq(
+    uv.fs_stat(publishing.partial .. ".json"),
+    nil,
+    "recovery then deletion leaves no partial metadata behind"
+  )
+
+  -- Older complete rows have no partial_path. Recover only sidecars whose
+  -- decoded identity and audio path match, preserving unrelated files.
+  for _, matching in ipairs({ true, false }) do
+    local path = dir .. (matching and "/legacy.mp3" or "/foreign.mp3")
+    local legacy = model.recording({
+      id = path,
+      path = path,
+      final_path = path,
+      status = "complete",
+      recovery_pending = true,
+    })
+    vim.fn.writefile({ "audio" }, path)
+    local previous =
+      model.recording({ id = matching and legacy.id or "someone-else", path = path .. ".part" })
+    vim.fn.writefile({ model.encode_recording(previous) }, path .. ".part.json")
+    store:save_recording(legacy)
+    H.eq(#Recorder.recover(store, opts), 0, "legacy metadata recovery succeeds")
+    H.eq(
+      uv.fs_stat(path .. ".part.json") == nil,
+      matching,
+      "legacy cleanup checks sidecar ownership"
+    )
+    H.eq(
+      store:recording(legacy.id).partial_path,
+      matching and (path .. ".part") or nil,
+      "legacy cleanup records only a verified partial path"
+    )
+    removing:remove_recording(legacy.id)
+  end
+
+  local tracked = model.recording({
+    id = "tracked",
+    path = dir .. "/tracked.mp3",
+    final_path = dir .. "/tracked.mp3",
+    partial_path = dir .. "/original-audio.part",
+    status = "complete",
+    recovery_pending = true,
+  })
+  vim.fn.writefile({ "audio" }, tracked.path)
+  vim.fn.writefile({ "{}" }, tracked.partial_path .. ".json")
+  store:save_recording(tracked)
+  H.eq(#Recorder.recover(store, opts), 0, "tracked nonstandard partial path recovers")
+  H.eq(uv.fs_stat(tracked.partial_path .. ".json"), nil, "cleanup uses the persisted original path")
+  removing:remove_recording(tracked.id)
 
   uv.fs_open = function(path, ...)
     if path:match("%.json%.tmp$") then
