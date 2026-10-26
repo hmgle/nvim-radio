@@ -37,6 +37,14 @@ return function()
   vim.cmd("RadioRecord --output-dir /tmp/music 45s")
   H.eq(captured.duration, 45, "duration parsed after the flag")
   H.eq(captured.dir, "/tmp/music", "output dir parsed (flags first)")
+  vim.cmd([[RadioRecord 30 --output-dir /tmp/My\ Music]])
+  H.eq(captured.duration, 30, "escaped directory keeps its duration")
+  H.eq(captured.dir, "/tmp/My Music", "Ex-escaped spaces remain in the directory")
+  vim.cmd([[RadioRecord --output-dir /tmp/My\ Music 45s]])
+  H.eq(captured.duration, 45, "duration after an escaped directory is parsed")
+  H.eq(captured.dir, "/tmp/My Music", "escaped directory before duration stays intact")
+  vim.cmd([[RadioRecord --output-dir /tmp/radio\\files]])
+  H.eq(captured.dir, [[/tmp/radio\files]], "Ex-escaped backslashes remain in the directory")
   vim.cmd("RadioRecord")
   H.eq(captured.duration, nil, "no duration without arguments")
   H.eq(captured.dir, nil, "no output dir without arguments")
@@ -90,6 +98,10 @@ return function()
   for _, command in ipairs({
     "RadioRecord abc",
     "RadioRecord --output-dir",
+    "RadioRecord 30 45",
+    "RadioRecord --output-dir /tmp/music 30 45",
+    "RadioRecord --output-dir /tmp/music --output-dir /tmp/other",
+    "RadioRecord --unknown-option",
     "RadioRecordings remove nope",
     "RadioFavorites add not-a-uuid",
     "RadioStationAdd Foo notaurl",

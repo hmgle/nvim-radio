@@ -70,21 +70,24 @@ command("RadioVolume", function(info)
 end, { nargs = 1, desc = "Set or adjust volume" })
 
 command("RadioRecord", function(info)
-  local args = vim.split(vim.trim(info.args), "%s+")
+  local args = info.fargs
   local duration, dir = nil, nil
   local index = 1
   while index <= #args do
     local arg = args[index]
     if arg == "--output-dir" then
+      if dir then
+        error("usage: RadioRecord [duration] [--output-dir <directory>]", 0)
+      end
       dir = args[index + 1]
       if not dir or dir == "" or dir:sub(1, 2) == "--" then
         error("usage: RadioRecord [duration] --output-dir <directory>", 0)
       end
       index = index + 2
-    elseif arg ~= "" then
-      duration = arg
-      index = index + 1
+    elseif duration or arg:sub(1, 2) == "--" then
+      error("usage: RadioRecord [duration] [--output-dir <directory>]", 0)
     else
+      duration = arg
       index = index + 1
     end
   end
