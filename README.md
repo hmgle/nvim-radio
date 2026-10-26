@@ -71,7 +71,8 @@ require("radio").setup({ volume = 80 })
 ```
 
 The browser opens with the current filters applied. Press `i` to search, `F`
-to filter, `Enter` to play, `r` to record, `q` to close. Results are paged
+to filter, `Enter` to play, `r` to record, `q` to close. Filter value menus
+offer prefix search and previous/next pages. Results are paged
 (`L` / `H`), and the header tracks playback and recording live. Random sorting
 keeps the same order for the current session so pages do not repeat stations. `:RadioSync`
 downloads the catalog in pages of 1000 stations and publishes it atomically;

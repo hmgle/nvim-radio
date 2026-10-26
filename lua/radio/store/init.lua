@@ -123,12 +123,13 @@ end
 ---@param kind integer
 ---@param prefix string
 ---@param limit integer|nil
+---@param offset integer|nil
 ---@return table[]
-function Store:facets(kind, prefix, limit)
+function Store:facets(kind, prefix, limit, offset)
   prefix = util.trim(prefix or "")
   local sql = [[SELECT value,n FROM facets_cache WHERE kind=?1
-    AND substr(value,1,length(?2))=?2 ORDER BY value LIMIT ?3]]
-  local rows = self._db:execute(sql, { kind, prefix, limit or 100000 })
+    AND substr(value,1,length(?2))=?2 ORDER BY value LIMIT ?3 OFFSET ?4]]
+  local rows = self._db:execute(sql, { kind, prefix, limit or 100000, offset or 0 })
   local out = {}
   for _, row in ipairs(rows) do
     out[#out + 1] = { value = row.value, count = row.n }

@@ -56,6 +56,51 @@ return function()
   end)
   vim.ui.select = select
   H.eq(applied, "classic rock", "facet selection retains spaces")
+
+  local tags = {}
+  for i = 1, 205 do
+    tags[i] = string.format("tag%03d", i)
+  end
+  local many = model.station({
+    stationuuid = "11111111-2222-4333-8444-555555555555",
+    name = "Many tags",
+    tags = table.concat(tags, ","),
+    active = true,
+  })
+  engine.store:upsert(many)
+  local round = 0
+  vim.ui.select = function(options, _, cb)
+    round = round + 1
+    local target = round == 1 and "Next page" or "tag205  (1)"
+    local index = vim.fn.index(options, target) + 1
+    H.check(index > 0, "facet page offers " .. target)
+    if index > 0 then
+      cb(options[index], index)
+    end
+  end
+  browser:_facet_filter(2, function(value)
+    applied = value
+  end)
+  H.eq(applied, "tag205", "facets beyond the first 200 can be selected")
+  local input = vim.ui.input
+  vim.ui.input = function(_, cb)
+    cb("TAG205")
+  end
+  round = 0
+  vim.ui.select = function(options, _, cb)
+    round = round + 1
+    local target = round == 1 and "Search values..." or "tag205  (1)"
+    local index = vim.fn.index(options, target) + 1
+    H.check(index > 0, "facet search offers " .. target)
+    if index > 0 then
+      cb(options[index], index)
+    end
+  end
+  browser:_facet_filter(2, function(value)
+    applied = value
+  end)
+  H.eq(applied, "tag205", "facet search normalizes the value prefix")
+  vim.ui.input, vim.ui.select = input, select
   engine.store:set_favorite(selected, false)
   browser:page(2)
   H.eq(browser.filter.offset, 20, "last page selected before sync")

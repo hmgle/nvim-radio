@@ -155,6 +155,7 @@ DUR accepts 30, 45s, 10m, 2h; range 1 second to 365 days.
 Enter, o, double-click   Play the selection.
 i, /                     Search the local catalog.
 F                        Country / language / tag / minimum-bitrate filters.
+                         Value menus offer prefix search and page navigation.
 s                        Cycle sort: clickcount, name, bitrate, votes, random.
 n                        Random station using the current filters.
 f                        Favorite / unfavorite.

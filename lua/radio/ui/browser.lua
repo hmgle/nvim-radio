@@ -595,23 +595,50 @@ end
 
 ---@param kind integer 0=country 1=language 2=tag
 ---@param apply fun(value: string|nil)
-function Browser:_facet_filter(kind, apply)
-  local facets = self.engine.store:facets(kind, "", 200)
+function Browser:_facet_filter(kind, apply, prefix, offset)
+  prefix, offset = prefix or "", offset or 0
+  local page_size = 200
+  local facets = self.engine.store:facets(kind, prefix, page_size + 1, offset)
   local options, values = { "* (any)" }, {}
-  for _, facet in ipairs(facets) do
-    local label = facet.value .. "  (" .. facet.count .. ")"
+  for i = 1, math.min(page_size, #facets) do
+    local facet = facets[i]
+    local label = util.display_line(facet.value) .. "  (" .. facet.count .. ")"
     options[#options + 1] = label
-    values[label] = facet.value
+    values[#options] = facet.value
   end
-  vim.ui.select(options, { prompt = "Value" }, function(choice)
+  options[#options + 1] = "Search values..."
+  local search_index = #options
+  local previous_index, next_index
+  if offset > 0 then
+    options[#options + 1] = "Previous page"
+    previous_index = #options
+  end
+  if #facets > page_size then
+    options[#options + 1] = "Next page"
+    next_index = #options
+  end
+  local prompt = prefix ~= "" and ("Value (prefix: " .. util.display_line(prefix) .. ")") or "Value"
+  vim.ui.select(options, { prompt = prompt }, function(choice, index)
     if not choice then
       return
     end
-    if choice == options[1] then
-      apply(nil)
-    else
-      apply(values[choice])
+    if index == search_index then
+      vim.ui.input({ prompt = "Value prefix (empty for all): ", default = prefix }, function(query)
+        if query ~= nil then
+          query = util.trim(query)
+          query = kind == 0 and query:upper() or query:lower()
+          self:_facet_filter(kind, apply, query, 0)
+        end
+      end)
+      return
+    elseif index == previous_index then
+      self:_facet_filter(kind, apply, prefix, math.max(0, offset - page_size))
+      return
+    elseif index == next_index then
+      self:_facet_filter(kind, apply, prefix, offset + page_size)
+      return
     end
+    apply(values[index])
     self.filter.offset = 0
     self:refresh()
   end)
