@@ -11,6 +11,25 @@ function M.trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+---Keep list fields and statusline text on one physical line.
+---@param text string|nil
+---@return string
+function M.display_line(text)
+  return ((text or ""):gsub("[\r\n]+", " "))
+end
+
+---Expand logical detail fields into buffer lines, preserving empty lines.
+---@param fields string[]
+---@return string[]
+function M.display_lines(fields)
+  local lines = {}
+  for _, field in ipairs(fields) do
+    local text = field:gsub("\r\n", "\n"):gsub("\r", "\n")
+    vim.list_extend(lines, vim.split(text, "\n", { plain = true }))
+  end
+  return lines
+end
+
 ---@param s string?
 ---@param prefix string
 ---@return boolean

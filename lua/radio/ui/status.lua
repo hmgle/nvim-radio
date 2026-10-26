@@ -34,7 +34,7 @@ function Status.statusline(engine)
   local title = status.title ~= "" and (" - " .. status.title) or ""
   parts[#parts + 1] = (ICONS[state] or "○") .. " " .. name .. title
   parts[#parts + 1] = status.volume .. "%" .. (status.muted and " 🔇" or "")
-  return "radio " .. table.concat(parts, "  ")
+  return util.display_line("radio " .. table.concat(parts, "  "))
 end
 
 ---Open a floating HUD with the full playback/recording status.
@@ -47,7 +47,7 @@ function Status.hud(engine)
     vim.api.nvim_win_close(Status.win, true)
   end
   local status = engine.status
-  local lines = {
+  local lines = util.display_lines({
     "station:  " .. (status.station and status.station.name or "-"),
     "title:    " .. (status.title ~= "" and status.title or "-"),
     "state:    " .. status.playback_state,
@@ -59,7 +59,7 @@ function Status.hud(engine)
     "source:   " .. (status.source_url ~= "" and status.source_url or "-"),
     "",
     "message:  " .. status.message,
-  }
+  })
   local width = math.max(1, math.min(vim.o.columns - 2, 72, math.floor(vim.o.columns * 0.5)))
   local height = math.max(1, math.min(#lines, vim.o.lines - 3))
   local buf = vim.api.nvim_create_buf(false, true)

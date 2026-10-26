@@ -358,7 +358,7 @@ function Browser:_header()
     state = state .. " ●REC " .. util.fmt_duration(status.recording_ms)
   end
   parts[#parts + 1] = state
-  return table.concat(parts, "  ·  ")
+  return util.display_line(table.concat(parts, "  ·  "))
 end
 
 ---@return string[]
@@ -375,8 +375,8 @@ function Browser:_lines()
       lines[#lines + 1] = string.format(
         "%3d. %-28s %-22s %-11s %8s %s",
         index,
-        util.truncate(util.trim(r.station_name), 28),
-        util.truncate(util.trim(r.track or ""), 22),
+        util.truncate(util.trim(util.display_line(r.station_name)), 28),
+        util.truncate(util.trim(util.display_line(r.track)), 22),
         r.status,
         util.fmt_bytes(r.size_bytes),
         (r.started_at or ""):gsub("T", " "):sub(1, 19)
@@ -386,13 +386,14 @@ function Browser:_lines()
       lines[#lines + 1] = string.format(
         "%3d. %-34s %-5s %6s %-9s %s",
         index,
-        util.truncate(util.trim(s.name), 34),
+        util.truncate(util.trim(util.display_line(s.name)), 34),
         (s.countrycode or ""):upper():sub(1, 5),
         s.bitrate > 0 and (s.bitrate .. "k") or "?",
         (s.codec or ""):sub(1, 9),
         s.favorite and "★" or ""
       )
     end
+    lines[#lines] = util.display_line(lines[#lines])
   end
   return lines
 end
@@ -704,6 +705,7 @@ function Browser:_render_preview()
     end
     return
   end
+  lines = util.display_lines(lines)
   local geometry = self.preview_geometry
   if not geometry then
     if self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then

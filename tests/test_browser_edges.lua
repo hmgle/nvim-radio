@@ -71,6 +71,57 @@ return function()
   H.eq(vim.api.nvim_win_is_valid(old), false, "opening HUD replaces old window")
   vim.api.nvim_win_close(current, true)
   H.eq(status.win, nil, "manual HUD close clears singleton")
+
+  -- Text can contain newlines both in directory data and recorder errors.
+  browser.items = {
+    {
+      kind = "station",
+      station = model.station({
+        name = "First line\nSecond line",
+        country = "Somewhere\r\nElsewhere",
+        tags = "one\ntwo",
+        codec = "mp3\ncodec",
+      }),
+    },
+  }
+  browser.filter.query = "query\ncontinuation"
+  H.check(pcall(browser.render, browser), "multiline station and query render")
+  local rendered = vim.api.nvim_buf_get_lines(browser.buf, 0, -1, false)
+  H.eq(#rendered, 2, "multiline list fields still occupy one row")
+  H.check(
+    rendered[2] and rendered[2]:find("First line Second line", 1, true),
+    "list replaces newlines with spaces"
+  )
+  H.check(pcall(browser._render_header, browser), "incremental header rendering handles newlines")
+  if browser.preview_buf then
+    local details = vim.api.nvim_buf_get_lines(browser.preview_buf, 0, -1, false)
+    H.check(vim.tbl_contains(details, "Second line"), "station details preserve separate lines")
+  end
+  local fixture = vim.json.decode(
+    table.concat(vim.fn.readfile(H.root .. "/tests/fixtures/radio-cli-recordings.json"), "\n")
+  )[1]
+  browser.items = { { kind = "recording", record = model.recording(fixture) } }
+  H.check(pcall(browser.render, browser), "normal CLI recording renders in details")
+  browser.items[1].record.error = "first failure\r\nsecond failure\nthird failure"
+  browser.items[1].record.track = "Artist\nTitle"
+  H.check(pcall(browser.render, browser), "multiline recording error renders in details")
+  if browser.preview_buf then
+    local details = vim.api.nvim_buf_get_lines(browser.preview_buf, 0, -1, false)
+    H.check(vim.tbl_contains(details, "second failure"), "recording error keeps its second line")
+    H.check(vim.tbl_contains(details, "third failure"), "recording error keeps its third line")
+  end
+  engine.status.station = model.station({ name = "Station\nName" })
+  engine.status.title = "Artist\r\nTitle"
+  engine.status.message = "first failure\nsecond failure"
+  local hud_ok, hud_buf, hud_win = pcall(status.hud, engine)
+  H.check(hud_ok, "multiline status opens HUD")
+  if hud_ok then
+    local hud_lines = vim.api.nvim_buf_get_lines(hud_buf, 0, -1, false)
+    H.check(vim.tbl_contains(hud_lines, "second failure"), "HUD preserves multiline errors")
+    vim.api.nvim_win_close(hud_win, true)
+  end
+  engine.status.playback_state = "playing"
+  H.eq(status.statusline(engine):find("[\r\n]"), nil, "statusline renders a single line")
   browser:close()
   engine:shutdown()
 end
