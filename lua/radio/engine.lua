@@ -79,6 +79,7 @@ function Engine.new(opts)
     resume_station = resume_station,
     refresh_count = 0,
     catalog_revision = 0,
+    recordings_revision = 0,
     finalizers = {},
     retiring_players = {},
     directory = directory.new({
@@ -876,6 +877,7 @@ function Engine:_record_source(station, candidates, duration, dir)
         self.recording_probe = nil
         self.recorder = recorder
         self.recording_owner = recorder
+        self.recordings_revision = self.recordings_revision + 1
         self.status.recording_state = RecordingState.Recording
         self.status.recording_path = recorder.record.path
         self:_say(
@@ -940,8 +942,13 @@ function Engine:_stop_recording(reason)
   self:_say("finalizing recording")
   recorder:finish(reason, function(record, err)
     self.finalizers[recorder] = nil
+    self.recordings_revision = self.recordings_revision + 1
     self:_complete_shutdown()
-    if self.stopping or self.recording_owner ~= recorder then
+    if self.stopping then
+      return
+    end
+    if self.recording_owner ~= recorder then
+      self:emit()
       return
     end
     self.status.recording_ms = 0
@@ -992,6 +999,8 @@ function Engine:remove_recording(id, index_only)
     end
   end
   self.store:remove_recording_index(id)
+  self.recordings_revision = self.recordings_revision + 1
+  self:emit()
 end
 
 function Engine:recording()

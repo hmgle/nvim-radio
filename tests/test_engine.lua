@@ -69,16 +69,34 @@ return function()
   engine:mute()
 
   -- Record the playing station, then stop and publish.
+  local browser = require("radio.ui.browser").new(engine)
+  browser.source = "recordings"
+  local recordings_page, queries = engine.store.recordings_page, 0
+  engine.store.recordings_page = function(self, ...)
+    queries = queries + 1
+    return recordings_page(self, ...)
+  end
+  browser:open()
+  H.eq(#browser.items, 0, "recording browser starts empty")
   engine:toggle_recording()
   H.wait_for(10000, function()
     return engine.status.recording_state == "recording"
   end, "recording starts")
+  H.wait_for(2000, function()
+    return #browser.items == 1
+  end, "new recording appears without manual refresh")
+  -- Also exercise a list explicitly opened/refreshed during recording.
+  browser:refresh()
+  H.eq(browser.items[1].record.status, "recording", "active row is visible before completion")
+  H.check(browser.items[1].record.path:match("%.part$"), "active row uses the partial path")
+  local progress_queries = queries
   H.wait_for(5000, function()
     return engine.status.recording_ms > 0
   end, "recording progress advances")
   H.wait_for(5000, function()
     return engine.status.recording_ms > 1000
   end, "recording elapsed time accumulates")
+  H.eq(queries, progress_queries, "recording progress does not requery the list")
   engine:toggle_recording()
   H.wait_for(15000, function()
     return engine.status.recording_state == "done" or engine.status.recording_state == "failed"
@@ -87,6 +105,16 @@ return function()
   H.eq(#engine.store:recordings(), 1, "one recording stored")
   local record = engine.store:recordings()[1]
   H.eq(record.status, "complete", "recording row complete")
+  H.wait_for(2000, function()
+    return browser.items[1] and browser.items[1].record.status == "complete"
+  end, "completion updates the open recording list")
+  H.eq(
+    browser.items[1] and browser.items[1].record.path,
+    record.path,
+    "list adopts the published path"
+  )
+  browser:yank("url")
+  H.eq(vim.fn.getreg('"'), record.path, "yanking uses the published path")
   H.check(vim.uv.fs_stat(record.path) ~= nil, "recording file published")
   H.eq(#engine.store:unfinished_recordings(), 0, "nothing pending")
 
@@ -116,6 +144,13 @@ return function()
     return engine.status.playback_state == "idle"
   end, "playback stops")
   H.check(vim.tbl_contains(transitions, "playing"), "playing transition observed")
+
+  engine:remove_recording(record.id)
+  H.wait_for(2000, function()
+    return #browser.items == 0
+  end, "external deletion updates the open recording list")
+  browser:close()
+  engine.store.recordings_page = recordings_page
 
   engine:shutdown()
   H.eq(engine.store, nil, "store closed on shutdown")

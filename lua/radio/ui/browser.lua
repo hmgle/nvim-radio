@@ -127,12 +127,16 @@ function Browser:open()
     end,
   })
   self.catalog_revision = self.engine.catalog_revision
+  self.recordings_revision = self.engine.recordings_revision
   self.unsubscribe = self.engine:subscribe(function()
     if self.engine.stopping then
       self:close()
     elseif self.buf and vim.api.nvim_buf_is_valid(self.buf) then
-      if self.catalog_revision ~= self.engine.catalog_revision then
-        self.catalog_revision = self.engine.catalog_revision
+      local catalog_changed = self.catalog_revision ~= self.engine.catalog_revision
+      local recordings_changed = self.recordings_revision ~= self.engine.recordings_revision
+      self.catalog_revision = self.engine.catalog_revision
+      self.recordings_revision = self.engine.recordings_revision
+      if catalog_changed or (recordings_changed and self.source == "recordings") then
         self:refresh()
       else
         self:_render_header()
@@ -283,6 +287,8 @@ function Browser:refresh()
     self:close()
     return
   end
+  self.catalog_revision = self.engine.catalog_revision
+  self.recordings_revision = self.engine.recordings_revision
   local selected = self:current_item()
   local selected_id = selected
     and (selected.kind == "station" and selected.station.stationuuid or selected.record.id)
