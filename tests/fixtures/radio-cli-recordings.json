@@ -1,0 +1,38 @@
+[
+  {
+    "id": "cli-complete",
+    "stationuuid": "14141414-1414-4414-8414-141414141414",
+    "station_name": "CLI Station",
+    "source_url_resolved": "https://example.test/live",
+    "started_at": "2026-01-01T00:00:00Z",
+    "stopped_at": "2026-01-01T00:01:00Z",
+    "media_duration_ms": 60000,
+    "codec": "mp3",
+    "container": "mp3",
+    "path": "/tmp/cli-complete.mp3",
+    "final_path": "/tmp/cli-complete.mp3",
+    "size_bytes": 960000,
+    "status": "complete",
+    "error": null,
+    "reconnects": 0,
+    "recovery_pending": false
+  },
+  {
+    "id": "cli-recording",
+    "stationuuid": "14141414-1414-4414-8414-141414141414",
+    "station_name": "CLI Station",
+    "source_url_resolved": "https://example.test/live",
+    "started_at": "2026-01-01T00:02:00Z",
+    "stopped_at": null,
+    "media_duration_ms": null,
+    "codec": "mp3",
+    "container": "mp3",
+    "path": "/tmp/cli-recording.mp3.part",
+    "final_path": null,
+    "size_bytes": 0,
+    "status": "recording",
+    "error": null,
+    "reconnects": 0,
+    "recovery_pending": false
+  }
+]

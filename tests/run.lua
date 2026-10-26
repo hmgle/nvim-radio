@@ -12,6 +12,7 @@ H.setup_runtime()
 
 local suites = {
   "test_config",
+  "test_model",
   "test_lock",
   "test_store",
   "test_store_edges",

@@ -60,7 +60,7 @@ function M.station(station)
   local out = vim.deepcopy(STATION_DEFAULTS)
   for _, key in ipairs(STATION_FIELDS) do
     local value = station[key]
-    if value ~= nil then
+    if value ~= nil and value ~= vim.NIL then
       out[key] = value
     end
   end
@@ -239,7 +239,7 @@ function M.recording(record)
   -- `out[key] ~= nil` check would silently drop track/final_path/error/...
   for _, key in ipairs(RECORDING_FIELDS) do
     local value = record[key]
-    if value ~= nil then
+    if value ~= nil and value ~= vim.NIL then
       out[key] = value
     end
   end
