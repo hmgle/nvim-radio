@@ -204,9 +204,41 @@ end
 function Directory:sync(store, opts, cb)
   opts = opts or {}
   local progress = opts.progress or function() end
-  self:discover(function(discover_err, servers)
+  local completed = false
+  local function finish(err, report)
+    if completed then
+      return
+    end
+    completed = true
+    cb(err, report)
+  end
+  -- Protect each asynchronous continuation as well as initial setup. A
+  -- storage exception must always release the engine's sync ownership.
+  local function guard(fn)
+    return function(...)
+      if completed then
+        return
+      end
+      local ok, err = pcall(fn, ...)
+      if not ok then
+        if completed then
+          error(err, 0)
+        end
+        finish(tostring(err), nil)
+      end
+    end
+  end
+  local function save_report(report)
+    local ok, err = pcall(function()
+      store:set_meta("last_sync_attempt", vim.json.encode(report))
+    end)
+    if not ok then
+      log.warn("could not save sync report: " .. tostring(err))
+    end
+  end
+  local discover = guard(function(discover_err, servers)
     if discover_err then
-      cb(discover_err, nil)
+      finish(discover_err, nil)
       return
     end
     local previous = store:directory_count()
@@ -226,7 +258,7 @@ function Directory:sync(store, opts, cb)
     local function attempt(server)
       index = index + 1
       if index > math.min(MAX_SERVERS, #servers) then
-        cb("directory_sync: " .. table.concat(failures, "; "), nil)
+        finish("directory_sync: " .. table.concat(failures, "; "), nil)
         return
       end
       local report = {
@@ -253,26 +285,29 @@ function Directory:sync(store, opts, cb)
         report.shrink_requires_acceptance = suspicious
         attempts[#attempts + 1] = report
         if suspicious and not opts.accept_shrink then
-          store:set_meta("last_sync_attempt", vim.json.encode(report))
-          cb("catalog_shrink: " .. server .. ": " .. previous .. " → " .. count .. " (>25%)", nil)
+          save_report(report)
+          finish(
+            "catalog_shrink: " .. server .. ": " .. previous .. " → " .. count .. " (>25%)",
+            nil
+          )
           return
         end
         local ok, published = pcall(store.finish_sync, store)
         if not ok then
           report.error = tostring(published)
-          store:set_meta("last_sync_attempt", vim.json.encode(report))
-          cb(tostring(published), nil)
+          save_report(report)
+          finish(tostring(published), nil)
           return
         end
-        store:set_meta("last_sync_attempt", vim.json.encode(report))
-        cb(nil, report)
+        save_report(report)
+        finish(nil, report)
       end
 
       local function fetch_page()
         if self:cancelled() then
           report.error = "cancelled"
           attempts[#attempts + 1] = report
-          cb("cancelled", nil)
+          finish("cancelled", nil)
           return
         end
         if offset >= MAX_OFFSET then
@@ -288,69 +323,74 @@ function Directory:sync(store, opts, cb)
           .. "&offset="
           .. offset
           .. "&hidebroken=true&order=name"
-        self:_request("get", url, {
-          connect_timeout = self.connect_timeout,
-          timeout = self.request_timeout,
-        }, function(err, body)
-          if err then
-            report.error = err
-            attempts[#attempts + 1] = report
-            failures[#failures + 1] = server .. ": " .. err
-            store:set_meta("last_sync_attempt", vim.json.encode(report))
-            attempt(servers[index + 1] or "")
-            return
-          end
-          local ok, decoded = pcall(vim.json.decode, body or "[]")
-          if not ok or type(decoded) ~= "table" then
-            report.error = "directory_request: invalid stations json"
-            attempts[#attempts + 1] = report
-            failures[#failures + 1] = server .. ": " .. report.error
-            store:set_meta("last_sync_attempt", vim.json.encode(report))
-            attempt(servers[index + 1] or "")
-            return
-          end
-          if #decoded > PAGE_SIZE then
-            report.error = "invalid_pagination"
-            attempts[#attempts + 1] = report
-            failures[#failures + 1] = server .. ": invalid_pagination"
-            store:set_meta("last_sync_attempt", vim.json.encode(report))
-            attempt(servers[index + 1] or "")
-            return
-          end
-          local stations, raw, invalid = map_rows(decoded)
-          report.raw = report.raw + raw
-          report.invalid = report.invalid + invalid
-          report.valid = report.valid + #stations
-          local staged, stage_err = pcall(store.stage, store, stations)
-          if not staged then
-            report.error = tostring(stage_err)
-            attempts[#attempts + 1] = report
-            store:set_meta("last_sync_attempt", vim.json.encode(report))
-            cb(tostring(stage_err), nil)
-            return
-          end
-          offset = offset + #decoded
-          progress(offset)
-          if self:cancelled() then
-            report.error = "cancelled"
-            attempts[#attempts + 1] = report
-            cb("cancelled", nil)
-            return
-          end
-          if #decoded < PAGE_SIZE then
-            if store:incoming_count() == 0 then
-              report.error = "empty_catalog"
+        self:_request(
+          "get",
+          url,
+          {
+            connect_timeout = self.connect_timeout,
+            timeout = self.request_timeout,
+          },
+          guard(function(err, body)
+            if err then
+              report.error = err
               attempts[#attempts + 1] = report
-              failures[#failures + 1] = server .. ": empty_catalog"
-              store:set_meta("last_sync_attempt", vim.json.encode(report))
+              failures[#failures + 1] = server .. ": " .. err
+              save_report(report)
               attempt(servers[index + 1] or "")
               return
             end
-            finish_success()
-            return
-          end
-          fetch_page()
-        end)
+            local ok, decoded = pcall(vim.json.decode, body or "[]")
+            if not ok or type(decoded) ~= "table" then
+              report.error = "directory_request: invalid stations json"
+              attempts[#attempts + 1] = report
+              failures[#failures + 1] = server .. ": " .. report.error
+              save_report(report)
+              attempt(servers[index + 1] or "")
+              return
+            end
+            if #decoded > PAGE_SIZE then
+              report.error = "invalid_pagination"
+              attempts[#attempts + 1] = report
+              failures[#failures + 1] = server .. ": invalid_pagination"
+              save_report(report)
+              attempt(servers[index + 1] or "")
+              return
+            end
+            local stations, raw, invalid = map_rows(decoded)
+            report.raw = report.raw + raw
+            report.invalid = report.invalid + invalid
+            report.valid = report.valid + #stations
+            local staged, stage_err = pcall(store.stage, store, stations)
+            if not staged then
+              report.error = tostring(stage_err)
+              attempts[#attempts + 1] = report
+              save_report(report)
+              finish(tostring(stage_err), nil)
+              return
+            end
+            offset = offset + #decoded
+            progress(offset)
+            if self:cancelled() then
+              report.error = "cancelled"
+              attempts[#attempts + 1] = report
+              finish("cancelled", nil)
+              return
+            end
+            if #decoded < PAGE_SIZE then
+              if store:incoming_count() == 0 then
+                report.error = "empty_catalog"
+                attempts[#attempts + 1] = report
+                failures[#failures + 1] = server .. ": empty_catalog"
+                save_report(report)
+                attempt(servers[index + 1] or "")
+                return
+              end
+              finish_success()
+              return
+            end
+            fetch_page()
+          end)
+        )
       end
 
       fetch_page()
@@ -358,6 +398,9 @@ function Directory:sync(store, opts, cb)
 
     attempt(servers[1] or "")
   end)
+  guard(function()
+    self:discover(discover)
+  end)()
 end
 
 ---Fetch one station by UUID.

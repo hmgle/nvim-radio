@@ -24,6 +24,7 @@ local suites = {
   "test_recording_remove",
   "test_http",
   "test_directory",
+  "test_sync_faults",
   "test_async",
   "test_lifecycle",
   "test_engine",
