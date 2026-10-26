@@ -35,7 +35,10 @@ jobs:
           gh release download "${release_args[@]}" --repo neovim/neovim \
             --pattern "$NVIM_ARCHIVE.tar.gz" \
             --pattern "$NVIM_ARCHIVE.tar.gz.sha256sum"
-          sha256sum -c "$NVIM_ARCHIVE.tar.gz.sha256sum"
+          # Recent releases ship no checksum assets; verify only when present.
+          if [ -f "$NVIM_ARCHIVE.tar.gz.sha256sum" ]; then
+            sha256sum -c "$NVIM_ARCHIVE.tar.gz.sha256sum"
+          fi
           tar -xzf "$NVIM_ARCHIVE.tar.gz"
           echo "$RUNNER_TEMP/neovim/$NVIM_ARCHIVE/bin" >> "$GITHUB_PATH"
       - name: Use a silent audio output
