@@ -148,6 +148,9 @@ resume="selection" restores only the source. resume=false restores neither.
 :RadioOpenRecordings         Open the recordings directory.
 
 DUR accepts 30, 45s, 10m, 2h; range 1 second to 365 days.
+Escape spaces in output directories with a backslash, for example: >
+  :RadioRecord 30 --output-dir /tmp/My\ Music
+<
 
 ==============================================================================
 7. BROWSER KEYS                                          *radio-browser-keys*

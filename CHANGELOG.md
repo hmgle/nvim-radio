@@ -7,6 +7,14 @@ follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
 ### Fixed
 
+- Always settle catalog sync after storage errors, even when saving the
+  diagnostic report also fails, so later sync attempts can proceed.
+- Preserve existing sidecar JSON on write, close, or rename failures.
+  Report metadata errors and keep recovery retryable until repair succeeds.
+- Refresh open recording lists on creation, completion, and deletion,
+  including the published path, without querying on progress ticks.
+- Preserve Ex-escaped spaces and backslashes in recording output paths;
+  reject extra durations, unknown options, and repeated output options.
 - Keep recording cleanup and completion callbacks running after database
   write failures; report persistence errors and retain recovery metadata.
 - Treat JSON null values from radio-cli as absent optional fields.

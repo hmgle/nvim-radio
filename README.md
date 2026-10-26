@@ -120,6 +120,8 @@ a shrink larger than 25 % is rejected unless confirmed.
 | `:RadioOpenRecordings` | Open the recordings directory |
 
 `DURATION` accepts `30`, `45s`, `10m`, and `2h`, from 1 second to 365 days.
+Escape spaces in output directories with a backslash, for example:
+`:RadioRecord 30 --output-dir /tmp/My\ Music`.
 
 ## Configuration
 

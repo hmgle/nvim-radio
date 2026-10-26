@@ -113,6 +113,8 @@ require("radio").setup({ volume = 80 })
 | `:RadioOpenRecordings` | 打开录音目录 |
 
 时长支持 `30`、`45s`、`10m`、`2h`，范围 1 秒到 365 天。
+输出目录中的空格需用反斜杠转义，例如：
+`:RadioRecord 30 --output-dir /tmp/My\ Music`。
 
 ## 配置
 
