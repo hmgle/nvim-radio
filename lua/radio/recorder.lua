@@ -489,11 +489,29 @@ function Recorder:_close_stderr()
   end
 end
 
+---Persistence must never prevent process cleanup or completion callbacks.
+---@return boolean saved
+function Recorder:_persist_recording()
+  local ok, err = pcall(self.store.save_recording, self.store, self.record)
+  if not ok then
+    self.record.recovery_pending = true
+    self._persistence_error = "recording_store: " .. tostring(err)
+    log.error(
+      "recording " .. self.record.id .. " (" .. self.record.path .. "): " .. self._persistence_error
+    )
+  end
+  write_sidecar(self.record)
+  return ok
+end
+
 function Recorder:_settle(err)
   if self._settled then
     return
   end
   self._settled = true
+  if self._persistence_error then
+    err = err and (err .. "\n" .. self._persistence_error) or self._persistence_error
+  end
   self._finish_error = err
   self:_close_stderr()
   local callbacks = self._finish_callbacks or {}
@@ -640,8 +658,10 @@ function Recorder:finish(reason, cb)
 
     if self.record.status == "complete" then
       self.record.status = "finalizing"
-      self.store:save_recording(self.record)
-      write_sidecar(self.record)
+      if not self:_persist_recording() then
+        self:_settle(nil)
+        return
+      end
       local published, publish_err = publish(self.partial, self.final_path)
       if not published then
         self.record.recovery_pending = true
@@ -651,8 +671,7 @@ function Recorder:finish(reason, cb)
           .. self.record.path
           .. ") finalization pending: "
           .. tostring(publish_err)
-        self.store:save_recording(self.record)
-        write_sidecar(self.record)
+        self:_persist_recording()
         self:_settle(tostring(publish_err))
         return
       end
@@ -662,8 +681,7 @@ function Recorder:finish(reason, cb)
         self.record.status = "failed"
         self.record.error = "recording_size_mismatch"
         self.record.recovery_pending = true
-        self.store:save_recording(self.record)
-        write_sidecar(self.record)
+        self:_persist_recording()
         self:_settle("recording_size_mismatch")
         return
       end
@@ -671,8 +689,7 @@ function Recorder:finish(reason, cb)
       self.record.status = "complete"
       self.record.error = nil
       self.record.recovery_pending = false
-      self.store:save_recording(self.record)
-      write_sidecar(self.record)
+      self:_persist_recording()
       vim.uv.fs_unlink(self.partial .. ".json")
       self:_settle(nil)
       return
@@ -690,8 +707,7 @@ function Recorder:finish(reason, cb)
     if self.errors ~= "" and not self.record.error:find(self.errors, 1, true) then
       self.record.error = self.record.error .. "\n" .. util.trim(self.errors)
     end
-    self.store:save_recording(self.record)
-    write_sidecar(self.record)
+    self:_persist_recording()
     self:_settle(nil)
   end
 
@@ -733,11 +749,11 @@ function Recorder:cancel(reason)
   self.record.stopped_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
   local stat = vim.uv.fs_stat(self.partial)
   self.record.size_bytes = stat and stat.size or 0
-  self.store:save_recording(self.record)
-  write_sidecar(self.record)
   if not self.ended and self.handle and not self.handle:is_closing() then
     pcall(vim.uv.process_kill, self.handle, "sigkill")
-  else
+  end
+  self:_persist_recording()
+  if self.ended or not self.handle then
     self:_settle(self.record.error)
   end
 end
