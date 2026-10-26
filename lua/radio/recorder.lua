@@ -281,16 +281,65 @@ local function publish(partial, final_path)
 end
 
 ---@param record table
+---@return boolean saved, string|nil err
 local function write_sidecar(record)
   local path = record.path .. ".json"
   local temp = path .. ".tmp"
-  local fd = vim.uv.fs_open(temp, "w", 420)
-  if not fd then
-    return
+  local encoded = model.encode_recording(record)
+  local fd, open_err = vim.uv.fs_open(temp, "w", 420)
+  local function failed(operation, err)
+    if fd then
+      vim.uv.fs_close(fd)
+    end
+    vim.uv.fs_unlink(temp)
+    return false, "recording_sidecar: " .. path .. ": " .. operation .. ": " .. tostring(err)
   end
-  vim.uv.fs_write(fd, vim.json.encode(record))
-  vim.uv.fs_close(fd)
-  vim.uv.fs_rename(temp, path)
+  if not fd then
+    return failed("open", open_err)
+  end
+  local offset = 0
+  while offset < #encoded do
+    local written, write_err = vim.uv.fs_write(fd, encoded:sub(offset + 1), offset)
+    if not written or written == 0 then
+      return failed("write", write_err or "zero-byte write")
+    end
+    offset = offset + written
+  end
+  local closed, close_err = vim.uv.fs_close(fd)
+  if not closed then
+    return failed("close", close_err)
+  end
+  fd = nil
+  local renamed, rename_err = vim.uv.fs_rename(temp, path)
+  if not renamed then
+    return failed("rename", rename_err)
+  end
+  return true
+end
+
+---Keep either persistence failure retryable, even on separate filesystems.
+---@return boolean saved, string|nil err
+local function persist_recording(store, record)
+  local errors = {}
+  local sidecar, sidecar_err = write_sidecar(record)
+  if not sidecar then
+    record.recovery_pending = true
+    errors[#errors + 1] = sidecar_err
+  end
+  -- Save the final state only after the sidecar outcome is known, so a
+  -- failed sidecar never briefly becomes a completed, non-retryable row.
+  local saved, save_err = pcall(store.save_recording, store, record)
+  if not saved then
+    record.recovery_pending = true
+    errors[#errors + 1] = "recording_store: " .. tostring(save_err)
+    if sidecar then
+      local marked, mark_err = write_sidecar(record)
+      if not marked then
+        errors[#errors + 1] = mark_err
+      end
+    end
+  end
+  return #errors == 0, #errors > 0 and table.concat(errors, "\n") or nil
 end
 
 ---Start recording `url` into `dir`.
@@ -444,7 +493,7 @@ function Recorder.start(opts, store, station, url, dir, duration, info, track)
     self:_consume_stderr(chunk)
   end)
 
-  write_sidecar(self.record)
+  self:_persist_recording()
   if duration then
     self.deadline = vim.uv.now() + (duration + (opts.playback_timeout_secs or 12)) * 1000
   end
@@ -492,15 +541,13 @@ end
 ---Persistence must never prevent process cleanup or completion callbacks.
 ---@return boolean saved
 function Recorder:_persist_recording()
-  local ok, err = pcall(self.store.save_recording, self.store, self.record)
+  local ok, err = persist_recording(self.store, self.record)
+  self._persistence_error = err
   if not ok then
-    self.record.recovery_pending = true
-    self._persistence_error = "recording_store: " .. tostring(err)
     log.error(
       "recording " .. self.record.id .. " (" .. self.record.path .. "): " .. self._persistence_error
     )
   end
-  write_sidecar(self.record)
   return ok
 end
 
@@ -689,8 +736,9 @@ function Recorder:finish(reason, cb)
       self.record.status = "complete"
       self.record.error = nil
       self.record.recovery_pending = false
-      self:_persist_recording()
-      vim.uv.fs_unlink(self.partial .. ".json")
+      if self:_persist_recording() then
+        vim.uv.fs_unlink(self.partial .. ".json")
+      end
       self:_settle(nil)
       return
     end
@@ -765,9 +813,16 @@ end
 function Recorder.recover(store, opts)
   local warnings = {}
   for _, record in ipairs(store:unfinished_recordings()) do
+    local persistence_failed = false
+    local function persisted(saved, err)
+      if not saved then
+        persistence_failed = true
+        error(err, 0)
+      end
+    end
     local ok, err = pcall(function()
       if record.status == "finalizing" then
-        Recorder._complete_finalization(store, record)
+        persisted(Recorder._complete_finalization(store, record))
         return
       end
       if record.status == "recording" then
@@ -777,19 +832,15 @@ function Recorder.recover(store, opts)
         local stat = vim.uv.fs_stat(record.path)
         record.size_bytes = stat and stat.size or 0
         record.recovery_pending = true
-        store:save_recording(record)
       end
       local retry = record.recovery_pending
-      if retry then
+      if retry and record.status == "interrupted" then
         record.error = vim.uv.fs_stat(record.path)
             and "previous session ended unexpectedly; partial file retained, metadata recovered"
           or "previous session ended unexpectedly; audio file missing, metadata recovered"
       end
       record.recovery_pending = false
-      write_sidecar(record)
-      if retry then
-        store:save_recording(record)
-      end
+      persisted(persist_recording(store, record))
     end)
     if not ok then
       if not vim.uv.fs_stat(record.path) and record.final_path then
@@ -804,11 +855,15 @@ function Recorder.recover(store, opts)
         .. record.path
         .. "): "
         .. tostring(err)
-      record.error = message
       -- Publication failures retain the audio, but must not keep a dead
       -- session permanently active or prevent the user from removing it.
-      record.status = "failed"
-      record.recovery_pending = false
+      if persistence_failed then
+        record.recovery_pending = true
+      else
+        record.error = message
+        record.status = "failed"
+        record.recovery_pending = false
+      end
       local saved, save_err = pcall(store.save_recording, store, record)
       if not saved then
         warnings[#warnings + 1] = message .. "; database: " .. tostring(save_err)
@@ -822,6 +877,7 @@ end
 
 ---@param store table
 ---@param record table
+---@return boolean saved, string|nil err
 function Recorder._complete_finalization(store, record)
   local partial = record.path
   local final_path = record.final_path
@@ -843,11 +899,14 @@ function Recorder._complete_finalization(store, record)
   record.status = "complete"
   record.error = nil
   record.recovery_pending = false
-  write_sidecar(record)
-  store:save_recording(record)
+  local saved, err = persist_recording(store, record)
+  if not saved then
+    return false, err
+  end
   if partial ~= final_path then
     vim.uv.fs_unlink(partial .. ".json")
   end
+  return true
 end
 
 log.debug("recorder module loaded")
