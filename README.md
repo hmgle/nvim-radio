@@ -148,7 +148,13 @@ require("radio").setup({
   debug = false,
   data_dir = nil,               -- default $XDG_DATA_HOME/nvim-radio
   keys = {},                    -- opt-in global keymaps
-  ui = { width = 0.8, height = 0.8, border = "rounded", preview = true },
+  ui = {
+    width = 0.8,
+    height = 0.8,
+    border = "rounded",
+    title = " nvim-radio ",
+    preview = true,
+  },
 })
 ```
 

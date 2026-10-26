@@ -7,6 +7,12 @@ follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
 ### Fixed
 
+- Publish valid recordings when final codec verification cannot answer
+  (including a scaled timeout), while retaining failure for a decoded
+  codec that genuinely differs from the expected stream.
+- Keep preview refreshes from moving user focus, render non-string Radio
+  Browser fields safely, and rebuild a details pane whose buffer was
+  replaced.
 - Publish recordings with atomic hard links instead of check-then-rename,
   preserving concurrently created destination files and recovering safely
   when interrupted before removing the partial name.
@@ -138,7 +144,7 @@ Initial release: a Neovim Lua radio player modeled on radio-cli.
 
 - Lua `setup()` configuration instead of `config.toml`.
 - HTTP mirror-list server discovery instead of a DNS SRV lookup first.
-- pidfile session lock instead of flock.
+- Kernel `flock` session locking shared with radio-cli.
 - No artwork rendering, TUI, shell completions, or man page.
 
 [0.1.0]: https://github.com/hmgle/nvim-radio/releases/tag/v0.1.0

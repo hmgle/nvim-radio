@@ -140,7 +140,7 @@ return function()
   local free_dir = H.tmpdir("regress-lock-off")
   config.setup({ data_dir = free_dir, auto_sync_days = 0, single_instance = false })
   local free = assert(Engine.new({ auto_sync = false }))
-  H.eq(vim.uv.fs_stat(free_dir .. "/run/nvim-radio.pid"), nil, "no lock when single_instance=false")
+  H.eq(vim.uv.fs_stat(free_dir .. "/run/media.lock"), nil, "no lock when single_instance=false")
   free:shutdown()
 
   ------------------------------------------------------------------

@@ -46,10 +46,4 @@ function M.debug(msg)
   notify(msg, vim.log.levels.DEBUG)
 end
 
----Wrap a message with an error prefix.
----@param msg string
-function M.errorf(msg)
-  M.error(msg)
-end
-
 return M
