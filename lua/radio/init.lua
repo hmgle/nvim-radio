@@ -1,5 +1,6 @@
 -- Public API. Everything is lazy: nothing starts until first use.
 local M = {}
+local keymap_callbacks = {}
 
 M.version = require("radio.version").version
 
@@ -12,6 +13,14 @@ end
 
 ---Global keymaps are opt-in; see the `keys` option.
 function M._apply_keys()
+  -- Match callback identity so user replacements and buffer-local mappings
+  -- survive. Read the installed lhs so a changed mapleader is also safe.
+  for _, map in ipairs(vim.api.nvim_get_keymap("n")) do
+    if keymap_callbacks[map.callback] then
+      vim.keymap.del("n", map.lhs)
+    end
+  end
+  keymap_callbacks = {}
   local keys = require("radio.config").options.keys or {}
   local actions = {
     toggle = function()
@@ -45,12 +54,14 @@ function M._apply_keys()
   }
   for name, lhs in pairs(keys) do
     if lhs and actions[name] then
-      vim.keymap.set("n", lhs, function()
+      local callback = function()
         local ok, err = pcall(actions[name])
         if not ok then
           require("radio.log").error(tostring(err):gsub("^.-:%d+: ", ""))
         end
-      end, { desc = "nvim-radio: " .. name })
+      end
+      vim.keymap.set("n", lhs, callback, { desc = "nvim-radio: " .. name })
+      keymap_callbacks[callback] = true
     end
   end
 end
