@@ -250,7 +250,9 @@ radio.statusline()
   radio-cli features with no Neovim equivalent here.
 - Session exclusivity uses the same `flock` on `<data_dir>/run/media.lock`
   as radio-cli. Ownership is released by the OS after exit or a crash; the
-  lock file stays in place. `single_instance = false` disables exclusion.
+  lock file stays in place. `single_instance = false` disables exclusion
+  and automatic recording recovery. Recovery runs when an exclusive session
+  next opens the data directory; `force = true` also skips recovery.
 - The database schema matches radio-cli's, so both tools can share a data
   directory (only one media session at a time).
 

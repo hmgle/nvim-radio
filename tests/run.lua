@@ -28,6 +28,7 @@ local suites = {
   "test_sync_faults",
   "test_async",
   "test_lifecycle",
+  "test_shared_sessions",
   "test_engine",
   "test_playback_edges",
   "test_ui",

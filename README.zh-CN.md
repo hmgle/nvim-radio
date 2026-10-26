@@ -234,7 +234,8 @@ radio.statusline()
 - artwork 终端图形、TUI、shell 补全与 man 页是 radio-cli 特有功能，本插件
   没有对应实现。
 - 会话互斥与 radio-cli 共用 `<data_dir>/run/media.lock` 上的 `flock`。
-  退出或崩溃后由操作系统释放所有权，锁文件保留；`single_instance = false` 可关闭互斥。
+  退出或崩溃后由操作系统释放所有权，锁文件保留；`single_instance = false` 会关闭互斥
+  和录音自动恢复。之后以独占会话打开数据目录时才会恢复；`force = true` 也跳过恢复。
 - 数据库 schema 与 radio-cli 一致，两个工具可共用数据目录（但同时只能有
   一个媒体会话）。
 

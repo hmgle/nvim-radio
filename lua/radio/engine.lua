@@ -122,9 +122,12 @@ function Engine.new(opts)
     syncing = false,
   }, Engine)
 
-  local warnings = recorder_mod.recover(store, {
-    ffprobe = o.ffprobe,
-  })
+  local warnings = {}
+  -- Recovery changes recording ownership and deletion protection. Only an
+  -- exclusive session may assume unfinished rows belong to dead writers.
+  if session_lock then
+    warnings = recorder_mod.recover(store, { ffprobe = o.ffprobe })
+  end
   self.status.message = #warnings == 0 and "ready" or table.concat(warnings, "\n")
 
   if o.resume == true and resume_station then

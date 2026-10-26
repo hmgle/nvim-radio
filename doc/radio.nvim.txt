@@ -116,7 +116,9 @@ Paths:~
 
 The kernel flock is shared with radio-cli. Ownership ends when its holder
 exits or crashes; the lock file remains in place. single_instance=false
-disables exclusion. resume=true restores playback and the browsed source;
+disables exclusion and automatic recording recovery. Recovery runs on the
+next exclusive startup; force=true also skips recovery.
+resume=true restores playback and the browsed source;
 resume="selection" restores only the source. resume=false restores neither.
 
 ==============================================================================
