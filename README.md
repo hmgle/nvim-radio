@@ -258,6 +258,7 @@ radio.statusline()
 stylua --check lua plugin tests
 nvim --headless -l tests/run.lua                    # full suite
 NVIM_RADIO_TESTS=test_player nvim --headless -l tests/run.lua
+nvim --headless -u NONE -l tests/benchmark_sync.lua # 50,000-station sync timings
 ```
 
 Tests use an in-process HTTP server and real `mpv`/`ffmpeg`/`ffprobe`; the

@@ -202,13 +202,13 @@ function Store:refresh_search_stats()
     return
   end
   local ok = pcall(function()
-    local rows = self._db:execute([[
-      SELECT term,doc FROM station_search_terms
-      UNION ALL SELECT '',count(*) FROM stations]])
-    self._db:execute("DELETE FROM station_search_stats")
-    for _, row in ipairs(rows) do
-      self._db:execute("INSERT INTO station_search_stats VALUES (?1,?2)", { row.term, row.doc })
-    end
+    self._db:transaction(function()
+      self._db:execute("DELETE FROM station_search_stats")
+      self._db:execute([[
+        INSERT INTO station_search_stats(term,n)
+        SELECT term,doc FROM station_search_terms
+        UNION ALL SELECT '',count(*) FROM stations]])
+    end)
   end)
   if not ok then
     -- fts5vocab reads can fail mid-write; stats are hints only.
@@ -1056,8 +1056,11 @@ function Store:finish_sync()
     error("empty_catalog", 2)
   end
   self._db:transaction(function()
-    self._db:execute("UPDATE stations SET active=0 WHERE custom=0")
     self._db:execute([[
+      UPDATE stations SET active=0 WHERE custom=0 AND active=1
+        AND NOT EXISTS(SELECT 1 FROM incoming WHERE incoming.uuid=stations.uuid)]])
+    self._db:execute(
+      [[
       INSERT INTO stations (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url)
       SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url
       FROM incoming WHERE true
@@ -1065,7 +1068,13 @@ function Store:finish_sync()
         country=excluded.country,languages=excluded.languages,tags=excluded.tags,
         bitrate=excluded.bitrate,popularity=excluded.popularity,active=1,json=excluded.json,
         normalized_url=excluded.normalized_url
-      WHERE stations.custom=0]])
+      WHERE stations.custom=0 AND (
+        stations.name IS NOT excluded.name OR stations.search IS NOT excluded.search
+        OR stations.country IS NOT excluded.country OR stations.languages IS NOT excluded.languages
+        OR stations.tags IS NOT excluded.tags OR stations.bitrate IS NOT excluded.bitrate
+        OR stations.popularity IS NOT excluded.popularity OR stations.active IS NOT excluded.active
+        OR stations.json IS NOT excluded.json OR stations.normalized_url IS NOT excluded.normalized_url)]]
+    )
     self:set_meta("last_sync", os.date("!%Y-%m-%dT%H:%M:%SZ"))
     self:rebuild_facets()
   end)
