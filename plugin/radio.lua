@@ -178,7 +178,7 @@ command("RadioRecordings", function(info)
   for _, record in ipairs(recordings) do
     lines[#lines + 1] = string.format(
       "%s  %-11s %8s  %s",
-      record.id:sub(1, 8),
+      record.id,
       record.status,
       require("radio.util").fmt_bytes(record.size_bytes),
       record.station_name

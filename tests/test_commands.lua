@@ -95,6 +95,22 @@ return function()
   vim.notify = function(message, level)
     notifications[#notifications + 1] = { message, level }
   end
+  local record_id = "12345678-1111-4222-8333-444444444444"
+  engine.store:save_recording(
+    model.recording({ id = record_id, status = "complete", path = "/tmp/missing-command-recording" })
+  )
+  vim.cmd("RadioRecordings list")
+  local displayed_id = notifications[#notifications][1]:match("\n(%S+)")
+  H.eq(displayed_id, record_id, "recording list displays the full actionable ID")
+  local play_recording, played = engine.play_recording, nil
+  engine.play_recording = function(_, id)
+    played = id
+  end
+  vim.cmd("RadioRecordings play " .. displayed_id)
+  H.eq(played, record_id, "displayed recording ID reaches playback unchanged")
+  engine.play_recording = play_recording
+  vim.cmd("RadioRecordings remove " .. displayed_id .. " --index-only")
+  H.eq(engine.store:recording(record_id), nil, "displayed recording ID can remove its index")
   for _, command in ipairs({
     "RadioRecord abc",
     "RadioRecord --output-dir",
