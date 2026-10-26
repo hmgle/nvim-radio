@@ -155,6 +155,52 @@ return function()
     H.check(vim.tbl_contains(details, "second failure"), "recording error keeps its second line")
     H.check(vim.tbl_contains(details, "third failure"), "recording error keeps its third line")
   end
+  -- Directory mirrors are external data; malformed scalar types cannot crash
+  -- rendering and asynchronous preview refresh cannot steal focus.
+  browser.preview = true
+  browser.preview_geometry = { row = 0, col = 90, width = 20, height = 5 }
+  browser.items = {
+    {
+      kind = "station",
+      station = model.station({
+        stationuuid = "11111111-1111-4111-8111-111111111111",
+        name = "Typed Fixture",
+        url = "https://example.test/live",
+        active = true,
+        countrycode = 42,
+        country = true,
+        languagecodes = false,
+        codec = true,
+      }),
+    },
+  }
+  H.check(pcall(browser.render, browser), "non-string fields render in list and details")
+  H.check(browser.preview_buf ~= nil, "forced details geometry creates preview")
+  local user_window
+  for _, window in ipairs(vim.api.nvim_list_wins()) do
+    if window ~= browser.win and window ~= browser.preview_win then
+      user_window = window
+      break
+    end
+  end
+  vim.api.nvim_set_current_win(user_window)
+  browser:_render_preview()
+  H.eq(vim.api.nvim_get_current_win(), user_window, "preview refresh preserves focus")
+
+  -- Replacing the details buffer must not leave a stale buffer/window pair.
+  local stale_preview = browser.preview_buf
+  vim.api.nvim_set_current_win(browser.preview_win)
+  vim.cmd("enew")
+  vim.api.nvim_set_current_win(user_window)
+  if vim.api.nvim_buf_is_valid(stale_preview) then
+    vim.api.nvim_buf_delete(stale_preview, { force = true })
+  end
+  H.check(pcall(browser._render_preview, browser), "stale details buffer is recreated")
+  H.check(
+    browser.preview_buf ~= stale_preview and vim.api.nvim_buf_is_valid(browser.preview_buf),
+    "details buffer replacement updates the pair"
+  )
+
   engine.status.station = model.station({ name = "Station\nName" })
   engine.status.title = "Artist\r\nTitle"
   engine.status.message = "first failure\nsecond failure"

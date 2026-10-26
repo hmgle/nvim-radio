@@ -385,7 +385,7 @@ function Browser:_lines()
         util.truncate(util.trim(util.display_line(r.track)), 22),
         r.status,
         util.fmt_bytes(r.size_bytes),
-        (r.started_at or ""):gsub("T", " "):sub(1, 19)
+        (tostring(r.started_at or "")):gsub("T", " "):sub(1, 19)
       )
     else
       local s = item.station
@@ -393,9 +393,9 @@ function Browser:_lines()
         "%3d. %-34s %-5s %6s %-9s %s",
         index,
         util.truncate(util.trim(util.display_line(s.name)), 34),
-        (s.countrycode or ""):upper():sub(1, 5),
+        (tostring(s.countrycode or "")):upper():sub(1, 5),
         s.bitrate > 0 and (s.bitrate .. "k") or "?",
-        (s.codec or ""):sub(1, 9),
+        (tostring(s.codec or "")):sub(1, 9),
         s.favorite and "★" or ""
       )
     end
@@ -693,16 +693,17 @@ function Browser:_render_preview()
     lines = {
       s.name,
       "",
-      "country:  " .. (s.country ~= "" and s.country or (s.countrycode or "")),
-      "language: " .. (s.language ~= "" and s.language or (s.languagecodes or "")),
-      "tags:     " .. (s.tags or ""),
+      "country:  " .. (s.country ~= "" and tostring(s.country) or tostring(s.countrycode or "")),
+      "language: "
+        .. (s.language ~= "" and tostring(s.language) or tostring(s.languagecodes or "")),
+      "tags:     " .. tostring(s.tags or ""),
       "bitrate:  " .. (s.bitrate > 0 and (s.bitrate .. " kbps") or "unknown"),
-      "codec:    " .. (s.codec ~= "" and s.codec or "unknown"),
+      "codec:    " .. (s.codec ~= "" and tostring(s.codec) or "unknown"),
       "votes:    " .. tostring(s.votes),
       "clicks:   " .. tostring(s.clickcount),
       "",
       "url:      " .. model.Station.primary_url(s),
-      "homepage: " .. (s.homepage or ""),
+      "homepage: " .. tostring(s.homepage or ""),
       "",
       "uuid:     " .. s.stationuuid,
       "custom:   " .. tostring(s.custom),
@@ -711,11 +712,11 @@ function Browser:_render_preview()
   elseif item and item.kind == "recording" then
     local r = item.record
     lines = {
-      r.station_name,
-      r.track or "",
+      tostring(r.station_name),
+      tostring(r.track or ""),
       "",
       "status:   " .. r.status,
-      "codec:    " .. r.codec .. " / " .. r.container,
+      "codec:    " .. tostring(r.codec) .. " / " .. tostring(r.container),
       "size:     " .. util.fmt_bytes(r.size_bytes),
       "duration: " .. util.fmt_duration(r.media_duration_ms or 0),
       "started:  " .. tostring(r.started_at),
@@ -744,12 +745,17 @@ function Browser:_render_preview()
     return
   end
   if self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
-    vim.api.nvim_buf_set_lines(self.preview_buf, 0, -1, false, lines)
-    vim.api.nvim_win_set_config(
-      self.preview_win,
-      vim.tbl_extend("force", geometry, { relative = "editor" })
-    )
-    return
+    if self.preview_buf and vim.api.nvim_buf_is_valid(self.preview_buf) then
+      vim.api.nvim_buf_set_lines(self.preview_buf, 0, -1, false, lines)
+      vim.api.nvim_win_set_config(
+        self.preview_win,
+        vim.tbl_extend("force", geometry, { relative = "editor" })
+      )
+      return
+    end
+    vim.api.nvim_win_close(self.preview_win, true)
+    self.preview_win = nil
+    self.preview_buf = nil
   end
   self.preview_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(self.preview_buf, 0, -1, false, lines)
@@ -767,7 +773,6 @@ function Browser:_render_preview()
   })
   vim.bo[self.preview_buf].bufhidden = "wipe"
   vim.bo[self.preview_buf].filetype = "nvim-radio"
-  vim.api.nvim_set_current_win(self.win)
 end
 
 log.debug("browser module loaded")
