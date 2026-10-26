@@ -7,8 +7,9 @@ follows Keep a Changelog, and the project adheres to Semantic Versioning.
 
 ### Fixed
 
-- Run automatic recording recovery only while holding the exclusive
-  session lock, preserving live recordings in shared or forced sessions.
+- Coordinate recovery with every nvim-radio session, including shared and
+  forced sessions, so mixed startup order cannot expose active recordings
+  to recovery or deletion. Hold recovery leases until child cleanup ends.
 - Use Unicode lowercase mappings consistently for search indexes, queries,
   language and tag filters, and facets; upgrade existing derived text.
 - Show complete recording IDs in command listings so they can be copied

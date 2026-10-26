@@ -6,13 +6,12 @@ ffi.cdef([[int flock(int fd, int operation);]])
 local Lock = {}
 Lock.__index = Lock
 
-function Lock.acquire(runtime_dir)
-  local path = runtime_dir .. "/media.lock"
+local function acquire(path, operation)
   local fd, err = vim.uv.fs_open(path, "a+", 384)
   if not fd then
     return nil, "session_lock: " .. tostring(err)
   end
-  local ok, result = pcall(ffi.C.flock, fd, 2 + 4) -- LOCK_EX | LOCK_NB
+  local ok, result = pcall(ffi.C.flock, fd, operation + 4) -- LOCK_NB
   if not ok or result ~= 0 then
     vim.uv.fs_close(fd)
     return nil,
@@ -20,6 +19,29 @@ function Lock.acquire(runtime_dir)
         or ("session_lock: " .. tostring(result))
   end
   return setmetatable({ fd = fd, path = path }, Lock)
+end
+
+function Lock.acquire(runtime_dir)
+  return acquire(runtime_dir .. "/media.lock", 2) -- LOCK_EX
+end
+
+---Every session participates, including sessions bypassing media.lock.
+---An exclusive recovery lease is downgraded after startup; shared leases
+---remain held until all owned writers and finalizers have exited.
+function Lock.recovery(runtime_dir, exclusive)
+  local path = runtime_dir .. "/recovery.lock"
+  if exclusive then
+    local lock = acquire(path, 2)
+    if lock then
+      return lock, true
+    end
+  end
+  local lock, err = acquire(path, 1) -- LOCK_SH
+  return lock, false, err
+end
+
+function Lock:share()
+  assert(ffi.C.flock(self.fd, 1 + 4) == 0, "session_lock: cannot share recovery lease")
 end
 
 function Lock:release()

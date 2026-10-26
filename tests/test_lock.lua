@@ -3,7 +3,7 @@ local H = require("tests.helpers")
 return function()
   local Lock = require("radio.lock")
   local dir = H.tmpdir("kernel-lock")
-  local function child(id, release)
+  local function child(id, release, mode)
     return vim.system({
       vim.v.progpath,
       "--headless",
@@ -15,6 +15,7 @@ return function()
       dir,
       dir .. "/result-" .. id,
       release,
+      mode or "exclusive",
     })
   end
   local function result(id)
@@ -40,6 +41,22 @@ return function()
   local next_owner = assert(Lock.acquire(dir))
   H.check(true, "kernel releases ownership after crash and normal close")
   next_owner:release()
+
+  local shared = child("shared", release, "shared-recovery")
+  H.eq(result("shared"), "owned", "separate process holds a shared recovery lease")
+  local lease, can_recover = Lock.recovery(dir, true)
+  H.check(lease ~= nil and not can_recover, "live shared process prevents recovery")
+  lease:release()
+  shared:kill("sigkill")
+  shared:wait(5000)
+  lease, can_recover = Lock.recovery(dir, true)
+  H.check(lease ~= nil and can_recover, "crashed participant releases recovery ownership")
+  H.eq(Lock.recovery(dir, false), nil, "recovery excludes new shared sessions")
+  lease:share()
+  local concurrent = assert(Lock.recovery(dir, false))
+  H.check(true, "shared sessions can enter after recovery finishes")
+  concurrent:release()
+  lease:release()
 
   -- libuv and external flock must agree (radio-cli uses flock on media.lock).
   if vim.fn.executable("flock") == 1 then

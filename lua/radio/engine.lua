@@ -55,8 +55,16 @@ function Engine.new(opts)
       return nil, lock_err
     end
   end
+  local recovery_lock, can_recover, recovery_err = Lock.recovery(o.runtime_dir, session_lock ~= nil)
+  if not recovery_lock then
+    if session_lock then
+      session_lock:release()
+    end
+    return nil, recovery_err
+  end
   local store, store_err = store_mod.open(o.db_path)
   if not store then
+    recovery_lock:release()
     if session_lock then
       session_lock:release()
     end
@@ -75,6 +83,7 @@ function Engine.new(opts)
   self = setmetatable({
     store = store,
     session_lock = session_lock,
+    recovery_lock = recovery_lock,
     resume_source = resume_source,
     resume_station = resume_station,
     refresh_count = 0,
@@ -123,10 +132,18 @@ function Engine.new(opts)
   }, Engine)
 
   local warnings = {}
-  -- Recovery changes recording ownership and deletion protection. Only an
-  -- exclusive session may assume unfinished rows belong to dead writers.
-  if session_lock then
-    warnings = recorder_mod.recover(store, { ffprobe = o.ffprobe })
+  -- media.lock alone cannot detect shared or forced sessions. The recovery
+  -- lease excludes every participating session while inspecting old rows.
+  if can_recover then
+    local recovered, result = pcall(recorder_mod.recover, store, { ffprobe = o.ffprobe })
+    if not recovered then
+      store:close()
+      recovery_lock:release()
+      session_lock:release()
+      return nil, tostring(result)
+    end
+    warnings = result
+    recovery_lock:share()
   end
   self.status.message = #warnings == 0 and "ready" or table.concat(warnings, "\n")
 
@@ -1073,6 +1090,10 @@ function Engine:_complete_shutdown()
   if self.session_lock then
     self.session_lock:release()
     self.session_lock = nil
+  end
+  if self.recovery_lock then
+    self.recovery_lock:release()
+    self.recovery_lock = nil
   end
   return true
 end

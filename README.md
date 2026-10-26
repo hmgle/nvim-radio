@@ -252,7 +252,10 @@ radio.statusline()
   as radio-cli. Ownership is released by the OS after exit or a crash; the
   lock file stays in place. `single_instance = false` disables exclusion
   and automatic recording recovery. Recovery runs when an exclusive session
-  next opens the data directory; `force = true` also skips recovery.
+  next opens the data directory with no other nvim-radio sessions alive;
+  `force = true` also skips recovery. All nvim-radio sessions hold a shared
+  lease on `run/recovery.lock` after startup, including those bypassing
+  `media.lock`; recovery requires exclusive ownership of both locks.
 - The database schema matches radio-cli's, so both tools can share a data
   directory (only one media session at a time).
 
