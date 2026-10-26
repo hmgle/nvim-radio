@@ -695,14 +695,22 @@ function Recorder:finish(reason, cb)
     self.record.size_bytes = stat and stat.size or 0
     self.record.stopped_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
     self.record.reconnects = self.reconnects
-    self._verification = Recorder.probe(self.opts, self.partial, 2, function(_, verification)
-      self._verification = nil
-      finalize(verification)
-    end)
+    local timeout =
+      math.min(30, math.max(2, 2 + math.floor(self.record.size_bytes / (5 * 1024 * 1024))))
+    self._verification = Recorder.probe(
+      self.opts,
+      self.partial,
+      timeout,
+      function(err, verification)
+        self._verification = nil
+        finalize(verification, err)
+      end
+    )
   end
 
   -- Step 2: decide the outcome from the probe result and publish.
-  finalize = function(verification)
+  local verification_note
+  finalize = function(verification, verification_error)
     if self._cancelled then
       return
     end
@@ -745,9 +753,14 @@ function Recorder:finish(reason, cb)
         and verification.streams
         and verification.streams[1]
         and verification.streams[1].codec_name
-      if probed ~= self.record.codec then
+      if verification and probed ~= self.record.codec then
         self.record.status = "failed"
         self.record.error = "recording audio verification failed; partial file retained"
+      elseif verification_error then
+        verification_note = self.record.error
+            and self.record.error .. "; audio verification unavailable: " .. verification_error
+          or "audio verification unavailable: " .. verification_error
+        self.record.error = verification_note
       end
     end
     if not self.record.media_duration_ms and self.duration_ms > 0 then
@@ -785,7 +798,7 @@ function Recorder:finish(reason, cb)
       end
       self.record.path = self.final_path
       self.record.status = "complete"
-      self.record.error = nil
+      self.record.error = verification_note
       self.record.recovery_pending = false
       self:_persist_recording()
       self:_settle(nil)

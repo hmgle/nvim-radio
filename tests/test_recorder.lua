@@ -132,6 +132,53 @@ return function()
   H.eq(stored.status, "complete", "database updated to complete")
   H.eq(#store:unfinished_recordings(), 0, "no unfinished recordings")
 
+  -- A timed-out final probe is an unavailable answer, not evidence that the
+  -- recording has the wrong codec.
+  local timeout_audio = dir .. "/timeout-fixture.mp3"
+  vim.uv.fs_copyfile(mp3, timeout_audio)
+  local slow_probe = dir .. "/slow-ffprobe"
+  vim.fn.writefile({
+    "#!/bin/sh",
+    "if [ -f " .. vim.fn.shellescape(dir .. "/probe-timeout") .. " ]; then",
+    "  sleep 6",
+    "else",
+    '  exec ffprobe "$@"',
+    "fi",
+  }, slow_probe)
+  vim.uv.fs_chmod(slow_probe, 448)
+  local timeout_writer = dir .. "/timeout-ffmpeg"
+  vim.fn.writefile({ "#!/bin/sh", "cat " .. vim.fn.shellescape(timeout_audio) }, timeout_writer)
+  vim.uv.fs_chmod(timeout_writer, 448)
+  local delayed = assert(
+    Recorder.start(
+      vim.tbl_extend("force", opts, { ffmpeg = timeout_writer, ffprobe = slow_probe }),
+      store,
+      station,
+      url .. "/fixture.mp3",
+      recordings,
+      nil,
+      { streams = { { codec_name = "mp3" } } }
+    )
+  )
+  H.wait_for(5000, function()
+    return delayed.ended
+  end, "timeout recording writer exits")
+  vim.fn.writefile({ "" }, dir .. "/probe-timeout")
+  local timeout_done = false
+  delayed:finish(nil, function()
+    timeout_done = true
+  end)
+  H.wait_for(10000, function()
+    return timeout_done
+  end, "verification timeout publishes the recording")
+  H.eq(delayed.record.status, "complete", "verification timeout does not fail a good recording")
+  H.check(
+    delayed.record.error:find("audio verification unavailable", 1, true) ~= nil,
+    "verification timeout is visible in the record"
+  )
+  H.eq(vim.uv.fs_stat(delayed.partial), nil, "timeout recording publishes the partial")
+  H.check(vim.uv.fs_stat(delayed.final_path) ~= nil, "timeout recording has published audio")
+
   local empty_ffmpeg = dir .. "/empty-ffmpeg"
   vim.fn.writefile({ "#!/bin/sh", "exit 0" }, empty_ffmpeg)
   vim.uv.fs_chmod(empty_ffmpeg, 448)
