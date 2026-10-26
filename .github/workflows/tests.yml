@@ -1,0 +1,53 @@
+name: Tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - neovim: v0.10.0
+            archive: nvim-linux64
+          - neovim: stable
+            archive: nvim-linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install media dependencies
+        run: sudo apt-get update && sudo apt-get install -y mpv ffmpeg libsqlite3-0
+      - name: Install Neovim
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NVIM_VERSION: ${{ matrix.neovim }}
+          NVIM_ARCHIVE: ${{ matrix.archive }}
+        run: |
+          release_args=()
+          if [ "$NVIM_VERSION" != stable ]; then
+            release_args+=("$NVIM_VERSION")
+          fi
+          mkdir -p "$RUNNER_TEMP/neovim"
+          cd "$RUNNER_TEMP/neovim"
+          gh release download "${release_args[@]}" --repo neovim/neovim \
+            --pattern "$NVIM_ARCHIVE.tar.gz" \
+            --pattern "$NVIM_ARCHIVE.tar.gz.sha256sum"
+          sha256sum -c "$NVIM_ARCHIVE.tar.gz.sha256sum"
+          tar -xzf "$NVIM_ARCHIVE.tar.gz"
+          echo "$RUNNER_TEMP/neovim/$NVIM_ARCHIVE/bin" >> "$GITHUB_PATH"
+      - name: Use a silent audio output
+        run: |
+          mkdir -p "$RUNNER_TEMP/media-bin"
+          cat > "$RUNNER_TEMP/media-bin/mpv" <<'EOF'
+          #!/bin/sh
+          exec /usr/bin/mpv --ao=null "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/media-bin/mpv"
+          echo "$RUNNER_TEMP/media-bin" >> "$GITHUB_PATH"
+      - name: Run tests
+        run: |
+          nvim --version
+          nvim --headless -u NONE -l tests/run.lua

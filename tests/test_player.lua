@@ -5,6 +5,17 @@ return function()
   local config = require("radio.config")
   local player_mod = require("radio.player")
 
+  -- uv.walk can crash Neovim 0.10 on editor-owned handles. Track only the
+  -- process handles created by this test, including vim.system children.
+  local spawn, processes = vim.uv.spawn, {}
+  vim.uv.spawn = function(...)
+    local handle, pid = spawn(...)
+    if handle then
+      processes[#processes + 1] = handle
+    end
+    return handle, pid
+  end
+
   local dir = H.tmpdir("player")
   config.setup({ data_dir = dir, auto_sync_days = 0 })
   local mp3 = H.make_mp3(dir, 4)
@@ -102,11 +113,11 @@ return function()
   H.eq(player.handle:is_closing(), true, "mpv process handle closes after exit")
   local function process_count()
     local count = 0
-    vim.uv.walk(function(handle)
-      if handle:get_type() == "process" and not handle:is_closing() then
+    for _, handle in ipairs(processes) do
+      if not handle:is_closing() then
         count = count + 1
       end
-    end)
+    end
     return count
   end
   local baseline = process_count()
@@ -187,4 +198,5 @@ return function()
   )
 
   stop()
+  vim.uv.spawn = spawn
 end

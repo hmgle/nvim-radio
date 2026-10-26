@@ -265,6 +265,8 @@ Tests use an in-process HTTP server and real `mpv`/`ffmpeg`/`ffprobe`; the
 directory tests use a fake Radio Browser server, so the default suite needs no
 network access. Lock tests launch separate Neovim processes; lifecycle tests
 exercise cancellation, forced child termination, and recovery.
+CI runs the suite on Neovim 0.10.0 and the latest stable release, using mpv's
+silent audio output.
 
 ## License
 

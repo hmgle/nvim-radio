@@ -241,7 +241,7 @@ local function available_space(dir)
     if stat then
       local statfs = vim.uv.fs_statfs(ancestor)
       if statfs then
-        return statfs.bavail * statfs.frsize
+        return statfs.bavail * (statfs.frsize or statfs.bsize)
       end
       return nil, "final_path_missing"
     end

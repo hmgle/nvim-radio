@@ -77,7 +77,7 @@ local function collect(checks)
   }
   local statfs = vim.uv.fs_statfs(o.recording_dir)
   if statfs then
-    local free = statfs.bavail * statfs.frsize
+    local free = statfs.bavail * (statfs.frsize or statfs.bsize)
     local required = o.recording_min_free_mb * 1024 * 1024
     checks[#checks + 1] = {
       ok = free >= required,
