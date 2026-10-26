@@ -631,15 +631,11 @@ function Browser:delete_recording()
       return
     end
     local index_only = choice:find("index only") ~= nil
-    if record.status == "recording" or record.status == "finalizing" or record.recovery_pending then
-      vim.notify("[radio] recording is active or awaiting recovery", vim.log.levels.WARN)
+    local ok, err = pcall(self.engine.remove_recording, self.engine, record.id, index_only)
+    if not ok then
+      log.error(tostring(err))
       return
     end
-    if not index_only then
-      vim.uv.fs_unlink(record.path)
-      vim.uv.fs_unlink(record.path .. ".json")
-    end
-    self.engine.store:remove_recording_index(record.id)
     vim.notify("[radio] recording removed: " .. record.id)
     self:refresh()
   end)

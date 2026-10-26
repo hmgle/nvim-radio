@@ -20,6 +20,7 @@ local suites = {
   "test_probes",
   "test_recorder",
   "test_recorder_faults",
+  "test_recording_remove",
   "test_http",
   "test_directory",
   "test_async",

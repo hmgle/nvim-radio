@@ -972,6 +972,28 @@ function Engine:_fail_recording(reason)
   self:_say("recording failed: " .. reason)
 end
 
+---Remove recording files before dropping their index; missing files are OK.
+---@param id string
+---@param index_only boolean|nil
+function Engine:remove_recording(id, index_only)
+  local record = self.store:recording(id)
+  if not record then
+    error("recording_not_found", 2)
+  end
+  if record.status == "recording" or record.status == "finalizing" or record.recovery_pending then
+    error("recording_in_use", 2)
+  end
+  if not index_only then
+    for _, path in ipairs({ record.path, record.path .. ".json" }) do
+      local ok, err, code = vim.uv.fs_unlink(path)
+      if not ok and code ~= "ENOENT" then
+        error("recording_remove: " .. path .. ": " .. tostring(err), 2)
+      end
+    end
+  end
+  self.store:remove_recording_index(id)
+end
+
 function Engine:recording()
   return self.status.recording_state == RecordingState.Probing
     or self.status.recording_state == RecordingState.Recording

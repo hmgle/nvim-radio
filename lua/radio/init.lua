@@ -212,18 +212,7 @@ end
 ---@param index_only boolean|nil
 function M.recording_remove(id, index_only)
   local engine = assert(M.engine())
-  local record = engine.store:recording(id)
-  if not record then
-    error("recording_not_found", 2)
-  end
-  if record.status == "recording" or record.status == "finalizing" or record.recovery_pending then
-    error("recording_in_use", 2)
-  end
-  if not index_only then
-    vim.uv.fs_unlink(record.path)
-    vim.uv.fs_unlink(record.path .. ".json")
-  end
-  engine.store:remove_recording_index(id)
+  engine:remove_recording(id, index_only)
 end
 
 function M.open_recordings()
